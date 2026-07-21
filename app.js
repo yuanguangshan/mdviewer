@@ -110,14 +110,18 @@ function setView(m) {
   if (m !== 'preview') editor.focus();
 }
 function nextView() {
-  const cycle = matchMedia('(max-width: 760px)').matches
-    ? ['edit', 'preview']     // 手机无分屏
-    : VIEW_CYCLE;
+  // 检测 workspace 是上下叠放（手机）还是左右分栏（桌面），而非用硬编码宽度
+  const gridCols = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns;
+  const isStacked = gridCols === '1fr' || gridCols === '1fr 0px';  // 单列 = 手机布局
+  const cycle = isStacked ? ['edit', 'preview'] : VIEW_CYCLE;
   setView(cycle[(cycle.indexOf(viewMode) + 1) % cycle.length]);
 }
 $('#btnView').addEventListener('click', nextView);
-// 手机默认纯编辑（双屏在窄屏各占一半太挤），桌面默认双栏
-setView(matchMedia('(max-width: 760px)').matches ? 'edit' : 'split');
+// 手机默认纯编辑（上下叠放时双屏没法用），桌面默认双栏
+{
+  const g = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns;
+  setView((g === '1fr' || g === '1fr 0px') ? 'edit' : 'split');
+}
 
 /* ---------- 同步滚动（编辑 ↔ 预览，仅双栏）---------- */
 let isSyncing = false;
