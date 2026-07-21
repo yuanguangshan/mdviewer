@@ -358,16 +358,16 @@ async function exportPDF() {
 }
 
 const moreMenu = $('#moreMenu');
+const btnMore = $('#btnMore');
 function openMoreMenu(open) {
-  moreMenu.toggleAttribute('hidden', !open);
-  $('#btnMore').setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) { moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); }
+  else { moreMenu.setAttribute('hidden', ''); btnMore.setAttribute('aria-expanded', 'false'); }
 }
-$('#btnMore').addEventListener('click', (e) => {
-  e.stopPropagation();
-  openMoreMenu(moreMenu.hasAttribute('hidden'));
-});
-document.addEventListener('click', () => {
-  if (!moreMenu.hasAttribute('hidden')) openMoreMenu(false);
+btnMore.addEventListener('click', () => openMoreMenu(moreMenu.hasAttribute('hidden')));
+document.addEventListener('click', (e) => {
+  if (!moreMenu.hasAttribute('hidden') && !moreMenu.contains(e.target) && !btnMore.contains(e.target)) {
+    openMoreMenu(false);
+  }
 });
 moreMenu.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-act]');
