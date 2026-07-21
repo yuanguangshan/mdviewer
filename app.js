@@ -260,14 +260,26 @@ async function saveFile() {
 }
 
 /* ---------- 新建 / 重命名 ---------- */
-$('#btnNew').addEventListener('click', () => {
+$('#btnNew').addEventListener('click', async () => {
   if (editor.value.trim() && !confirm('新建文档？未保存的内容将丢失。')) return;
-  editor.value = '';
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      editor.value = text;
+      flash('已从剪贴板创建');
+    } else {
+      editor.value = '';
+      flash('已新建');
+    }
+  } catch {
+    // 无剪贴板权限或剪贴板为空 → 新建空白文档
+    editor.value = '';
+    flash('已新建');
+  }
   currentFileHandle = null;
   currentName = '未命名.md';
   updateFileName();
   afterChange();
-  flash('已新建');
 });
 function renameFile() {
   const n = prompt('文件名：', currentName);
