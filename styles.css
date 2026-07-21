@@ -80,6 +80,7 @@ body {
   font-size: 13px; font-weight: 500;
 }
 .menu button:hover { background: var(--bg-soft); color: var(--accent-soft); }
+.menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 
 /* ---------- Workspace split ---------- */
 .workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }

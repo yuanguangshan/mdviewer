@@ -34,12 +34,10 @@ function applyTheme(mode) {
   document.documentElement.setAttribute('data-theme', r);
   document.querySelector('meta[name="theme-color"]').setAttribute('content', r === 'dark' ? '#0f1115' : '#f5f7fa');
   localStorage.setItem('md-theme', mode);
-  const b = $('#btnTheme');
-  b.textContent = THEME_ICON[mode];
-  b.title = '主题：' + THEME_LABEL[mode] + (mode === 'auto' ? '（当前 ' + (mql.matches ? '暗' : '亮') + '）' : '');
+  const mt = $('#menuTheme');
+  if (mt) mt.textContent = THEME_ICON[mode] + ' 主题：' + THEME_LABEL[mode] + (mode === 'auto' ? '（' + (mql.matches ? '暗' : '亮') + '）' : '');
 }
 mql.addEventListener('change', () => { if (themeMode === 'auto') applyTheme('auto'); });
-$('#btnTheme').addEventListener('click', () => applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]));
 applyTheme(themeMode);
 
 /* ---------- 渲染 + 代码高亮 ---------- */
@@ -262,24 +260,24 @@ $('#btnNew').addEventListener('click', () => {
   afterChange();
   flash('已新建');
 });
-$('#btnRename').addEventListener('click', () => {
+function renameFile() {
   const n = prompt('文件名：', currentName);
   if (n && n.trim()) {
     currentName = n.trim();
     updateFileName();
     saveDraft();
   }
-});
+}
 
 /* ---------- 复制 HTML（复用预览结果）---------- */
-$('#btnCopy').addEventListener('click', async () => {
+async function copyHTML() {
   try {
     await navigator.clipboard.writeText(preview.innerHTML);
     flash('已复制 HTML');
   } catch {
     flash('复制失败');
   }
-});
+}
 
 /* ---------- 导出 HTML / 打印 PDF ---------- */
 const EXPORT_CSS = [
@@ -351,25 +349,28 @@ async function exportPDF() {
   }
 }
 
-const exportMenu = $('#exportMenu');
-$('#btnExport').addEventListener('click', (e) => {
+const moreMenu = $('#moreMenu');
+function openMoreMenu(open) {
+  moreMenu.toggleAttribute('hidden', !open);
+  $('#btnMore').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+$('#btnMore').addEventListener('click', (e) => {
   e.stopPropagation();
-  const willOpen = exportMenu.hasAttribute('hidden');
-  exportMenu.toggleAttribute('hidden', !willOpen);
-  $('#btnExport').setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  openMoreMenu(moreMenu.hasAttribute('hidden'));
 });
 document.addEventListener('click', () => {
-  if (!exportMenu.hasAttribute('hidden')) {
-    exportMenu.setAttribute('hidden', '');
-    $('#btnExport').setAttribute('aria-expanded', 'false');
-  }
+  if (!moreMenu.hasAttribute('hidden')) openMoreMenu(false);
 });
-exportMenu.addEventListener('click', (e) => {
+moreMenu.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
-  exportMenu.setAttribute('hidden', '');
-  if (btn.dataset.act === 'html') exportHTML();
-  else if (btn.dataset.act === 'pdf') exportPDF();
+  const act = btn.dataset.act;
+  openMoreMenu(false);
+  if (act === 'rename') renameFile();
+  else if (act === 'copy') copyHTML();
+  else if (act === 'html') exportHTML();
+  else if (act === 'pdf') exportPDF();
+  else if (act === 'theme') applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]);
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */

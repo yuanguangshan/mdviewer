@@ -34,19 +34,21 @@
         <button id="btnNew" class="btn icon" title="新建 (Ctrl+Alt+N)" aria-label="新建文档">📄</button>
         <button id="btnOpen" class="btn icon" title="打开本地文件 (Ctrl+O)" aria-label="打开文件">📂</button>
         <button id="btnSave" class="btn primary" title="保存 / 另存为 (Ctrl+S)" aria-label="保存">💾<span class="t"> 保存</span></button>
-        <button id="btnRename" class="btn icon" title="重命名" aria-label="重命名">✏️</button>
         <span class="sep"></span>
         <button id="btnView" class="btn view" title="切换视图：双栏 / 编辑 / 预览" aria-label="切换视图">分屏</button>
-        <button id="btnCopy" class="btn icon" title="复制 HTML" aria-label="复制 HTML">📋</button>
+        <span class="stat" id="stat" title="字数 · 预计阅读时间">0 字</span>
         <div class="menu-wrap">
-          <button id="btnExport" class="btn icon" title="导出" aria-label="导出" aria-haspopup="true" aria-expanded="false">⬇️</button>
-          <div class="menu" id="exportMenu" role="menu" hidden>
+          <button id="btnMore" class="btn icon" title="更多操作" aria-label="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>
+          <div class="menu" id="moreMenu" role="menu" hidden>
+            <button role="menuitem" data-act="rename">✏️ 重命名</button>
+            <button role="menuitem" data-act="copy">📋 复制 HTML</button>
+            <div class="menu-sep"></div>
             <button role="menuitem" data-act="html">📄 导出 HTML</button>
             <button role="menuitem" data-act="pdf">🖨 打印为 PDF</button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-act="theme" id="menuTheme">🌓 主题</button>
           </div>
         </div>
-        <button id="btnTheme" class="btn icon" title="主题：自动 / 亮 / 暗" aria-label="切换主题">🌓</button>
-        <span class="stat" id="stat" title="字数 · 预计阅读时间">0 字</span>
         <input type="file" id="fileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
       </div>
     </header>
