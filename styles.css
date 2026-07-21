@@ -104,7 +104,7 @@ body {
   font-family: var(--mono); tab-size: 2; overflow-x: auto;
 }
 .preview-pane { background: var(--bg-soft); overflow: auto; }
-.preview { padding: 20px 26px; max-width: 860px; margin: 0 auto; }
+.preview { padding: 20px 26px; max-width: 860px; margin: 0 auto; min-width: 0; }
 
 /* ---------- View modes ---------- */
 body.no-preview .workspace { grid-template-columns: 1fr; }
