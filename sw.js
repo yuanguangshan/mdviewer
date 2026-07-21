@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v1.2.0';
+const CACHE_NAME = 'md-editor-v1.3.0';
 
 const SHELL = [
   './',
