@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v1.4.0';
+const CACHE_NAME = 'md-editor-v1.5.0';
 
 const SHELL = [
   './',
@@ -62,19 +62,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静态资源：缓存优先，缺失则网络取并写入缓存
+  // 静态资源：网络优先（保证 HTML / JS / CSS 版本一致，避免 SW 更新过渡期新旧错配导致脚本崩溃），离线再回退缓存
   event.respondWith((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(req);
-    if (cached) return cached;
     try {
       const fresh = await fetch(req);
       if (fresh && (fresh.ok || fresh.type === 'opaque')) {
+        const cache = await caches.open(CACHE_NAME);
         cache.put(req, fresh.clone());
       }
       return fresh;
     } catch {
-      // 图标等回退
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(req);
+      if (cached) return cached;
       if (url.pathname.endsWith('.png')) {
         const fallback = await cache.match('./icons/icon-192.png');
         if (fallback) return fallback;

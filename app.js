@@ -7,6 +7,14 @@ const previewPane = $('#previewPane');
 const gutter = $('#gutter');
 const fileInput = $('#fileInput');
 
+// 自愈守卫：关键按钮缺失 = SW 更新过渡期 HTML/JS 版本错配，刷新一次拉一致版本（限一次防死循环）
+if (!document.querySelector('#btnMore')) {
+  if (!sessionStorage.getItem('md-selfheal')) {
+    sessionStorage.setItem('md-selfheal', '1');
+    location.reload();
+  }
+}
+
 let currentFileHandle = null;   // FileSystemFileHandle（支持时用于原地保存）
 let currentName = '未命名.md';
 
