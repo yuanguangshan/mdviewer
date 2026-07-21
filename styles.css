@@ -184,18 +184,30 @@ body.no-editor .editor-pane { display: none; }
 [data-theme="light"] .markdown-body .hljs-tag,
 [data-theme="light"] .markdown-body .hljs-meta { color: #57606a; }
 
-/* ---------- 打印 / 导出 PDF：仅预览，白底黑字 ---------- */
+/* ---------- 打印 / 导出 PDF：仅预览，白底黑字，解除高度限制防多页截断 ---------- */
 @media print {
   .toolbar, .statusbar, .editor-pane, .gutter, .menu { display: none !important; }
-  html, body { height: auto; overflow: visible; background: #fff; color: #000; }
-  .app { display: block; height: auto; }
-  .workspace { display: block; }
-  .preview-pane { display: block; overflow: visible; background: #fff; }
-  .preview { max-width: none; padding: 0; color: #000; }
-  .markdown-body, .markdown-body p, .markdown-body li { color: #000; }
-  .markdown-body pre { border-color: #ccc; }
-  .markdown-body pre, .markdown-body code { background: #f5f5f5; }
-  .markdown-body pre code { color: #000; }
+  /* 重置所有外层容器：解除 100dvh / flex / overflow 限制，避免长文档只打印第一页 */
+  html, body, .app, .workspace, .preview-pane {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
+    position: static !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .preview { max-width: none !important; padding: 0 !important; margin: 0 !important; color: #000 !important; }
+  .markdown-body, .markdown-body p, .markdown-body li { color: #000 !important; }
+  .markdown-body pre { border-color: #ccc; background: #f8f9fa !important; }
+  .markdown-body pre, .markdown-body code { background: #f8f9fa !important; }
+  .markdown-body pre code { color: #000 !important; }
+  /* 代码块 / 引用 / 表格 / 图片避免跨页时被尴尬截断 */
+  .markdown-body pre, .markdown-body blockquote, .markdown-body table, .markdown-body img, .markdown-body tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
 }
 
 /* ---------- Mobile ---------- */

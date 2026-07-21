@@ -318,6 +318,38 @@ function exportHTML() {
   download(currentName.replace(/\.(md|markdown|txt)$/i, '') + '.html', doc, 'text/html;charset=utf-8');
   flash('已导出 HTML');
 }
+async function exportPDF() {
+  const pdfName = currentName.replace(/\.(md|markdown|txt)$/i, '') + '.pdf';
+  if (!window.html2pdf) { window.print(); return; }   // 无库降级系统打印
+  flash('正在生成 PDF…');
+  // 克隆预览内容到 off-screen 容器，强制亮色主题，不受当前视图 / 暗色主题影响
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('data-theme', 'light');
+  wrapper.style.cssText = 'position:absolute;left:-10000px;top:0;width:780px;background:#fff;padding:24px;';
+  const inner = document.createElement('div');
+  inner.className = 'markdown-body';
+  inner.innerHTML = preview.innerHTML;   // 复用已渲染内容（含 hljs class，亮色配色随 data-theme 自动生效）
+  wrapper.appendChild(inner);
+  document.body.appendChild(wrapper);
+  const opt = {
+    margin: [10, 10, 12, 10],
+    filename: pdfName,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+  };
+  try {
+    await html2pdf().set(opt).from(inner).save();
+    flash('已导出 PDF');
+  } catch (e) {
+    console.error(e);
+    flash('PDF 生成失败，改用系统打印');
+    window.print();
+  } finally {
+    wrapper.remove();
+  }
+}
 
 const exportMenu = $('#exportMenu');
 $('#btnExport').addEventListener('click', (e) => {
@@ -337,7 +369,7 @@ exportMenu.addEventListener('click', (e) => {
   if (!btn) return;
   exportMenu.setAttribute('hidden', '');
   if (btn.dataset.act === 'html') exportHTML();
-  else if (btn.dataset.act === 'pdf') window.print();
+  else if (btn.dataset.act === 'pdf') exportPDF();
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
