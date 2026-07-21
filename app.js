@@ -110,7 +110,8 @@ function setView(m) {
   if (m !== 'preview') editor.focus();
 }
 $('#btnView').addEventListener('click', () => setView(VIEW_CYCLE[(VIEW_CYCLE.indexOf(viewMode) + 1) % 3]));
-setView('split');
+// 手机默认纯编辑（双屏在窄屏各占一半太挤），桌面默认双栏
+setView(matchMedia('(max-width: 760px)').matches ? 'edit' : 'split');
 
 /* ---------- 同步滚动（编辑 ↔ 预览，仅双栏）---------- */
 let isSyncing = false;
