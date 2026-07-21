@@ -109,7 +109,13 @@ function setView(m) {
   $('#btnView').textContent = VIEW_LABEL[m];
   if (m !== 'preview') editor.focus();
 }
-$('#btnView').addEventListener('click', () => setView(VIEW_CYCLE[(VIEW_CYCLE.indexOf(viewMode) + 1) % 3]));
+function nextView() {
+  const cycle = matchMedia('(max-width: 760px)').matches
+    ? ['edit', 'preview']     // 手机无分屏
+    : VIEW_CYCLE;
+  setView(cycle[(cycle.indexOf(viewMode) + 1) % cycle.length]);
+}
+$('#btnView').addEventListener('click', nextView);
 // 手机默认纯编辑（双屏在窄屏各占一半太挤），桌面默认双栏
 setView(matchMedia('(max-width: 760px)').matches ? 'edit' : 'split');
 
