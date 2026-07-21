@@ -215,10 +215,19 @@ body.no-editor .editor-pane { display: none; }
   .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
   .editor-pane { border-right: 0; border-bottom: 1px solid var(--border); }
   body.no-preview .workspace, body.no-editor .workspace { grid-template-rows: 1fr; }
+  .toolbar { padding: 8px 10px; gap: 8px; }
+  .brand { font-size: 14px; }
   .brand span { display: none; }
-  .btn { padding: 7px 9px; font-size: 12px; }
+  /* 工具栏横向滚动，按钮单行不换行、不挤压编辑区 */
+  .actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .actions::-webkit-scrollbar { display: none; }
+  .btn { padding: 8px 9px; font-size: 15px; flex: 0 0 auto; }
   .btn .t { display: none; }
-  .btn.view { min-width: 0; }
-  .gutter { width: 38px; padding-right: 6px; }
-  .statusbar #posInfo { display: none; }
+  .btn.view { min-width: 0; font-size: 13px; padding: 8px 10px; }
+  .stat { display: none; }
+  /* 窄屏软换行：隐藏行号栏；字号≥16px 防 iOS Safari 聚焦时自动缩放页面 */
+  .gutter { display: none; }
+  #editor { padding: 16px; font-size: 16px; line-height: 1.6; }
+  .statusbar { padding: 5px 10px; font-size: 11px; }
+  .preview { padding: 16px; }
 }

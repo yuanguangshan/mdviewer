@@ -456,6 +456,14 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+/* ---------- 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ---------- */
+function applyResponsive() {
+  const narrow = window.innerWidth <= 760;
+  editor.wrap = narrow ? 'soft' : 'off';
+}
+window.addEventListener('resize', debounce(applyResponsive, 200));
+applyResponsive();
+
 /* ---------- 初始化 ---------- */
 setSaveState('', '就绪');
 loadDraft();
