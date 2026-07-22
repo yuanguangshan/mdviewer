@@ -98,13 +98,14 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .menu {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 100;
   background: var(--bg-elev); border: 1px solid var(--border); border-radius: 9px;
-  box-shadow: var(--shadow); padding: 4px; min-width: 150px;
+  box-shadow: var(--shadow); padding: 4px; min-width: 190px;
   max-height: calc(100dvh - 120px); overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
 .menu button {
   display: block; width: 100%; text-align: left; border: 0; background: transparent;
   color: var(--text); padding: 8px 12px; border-radius: 6px; cursor: pointer;
   font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .menu button:hover { background: var(--bg-soft); color: var(--accent-soft); }
 .menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
