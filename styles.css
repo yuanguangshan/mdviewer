@@ -233,7 +233,10 @@ body.no-editor .editor-pane { display: none; }
   /* 窄屏软换行：隐藏行号栏；字号≥16px 防 iOS Safari 聚焦时自动缩放页面 */
   .gutter { display: none; }
   #editor { padding: 16px; font-size: 16px; line-height: 1.6; }
-  .statusbar { padding: 5px 10px; font-size: 11px; }
+  .statusbar { padding: 5px 10px; font-size: 11px; gap: 8px; }
+  /* 手机状态栏：左侧文件名（≤1/2 宽，超长省略），其余信息靠右成组 */
+  .statusbar #fileName { flex: 0 1 50%; max-width: 50%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .statusbar #posInfo { flex: 0 0 auto; margin-left: auto; }
   .preview { padding: 16px; }
 }
 
