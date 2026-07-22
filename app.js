@@ -1401,6 +1401,64 @@ async function nasDownloadAndOpen() {
   await nasOpen(input);
 }
 
+/* ---------- 文库静默增量同步（本地→NAS，单向）----------
+   文库每篇改动后，自动把「updatedAt 晚于上次同步时间」的文档推到 NAS。
+   文件名用文库 id（{id}.md）：稳定唯一、可增量匹配、绝不重名覆盖。
+   单向：NAS 永不主动推回编辑器；用户需要时手动「从 NAS 下载」即可。
+   静默：仅状态栏小圆点提示，不打扰。 */
+const NAS_SYNC_STATE_KEY = 'nas-sync-state';
+const SYNC_DEBOUNCE_MS = 4000;
+
+function loadSyncState() {
+  try { return JSON.parse(localStorage.getItem(NAS_SYNC_STATE_KEY) || '{}'); } catch (_) { return {}; }
+}
+function saveSyncState(state) {
+  try { localStorage.setItem(NAS_SYNC_STATE_KEY, JSON.stringify(state)); } catch (_) {}
+}
+function setSyncDot(state, title) {
+  const dot = document.getElementById('syncDot');
+  if (dot) { dot.dataset.state = state; dot.title = 'NAS 同步：' + title; }
+}
+
+const syncLibraryToNasDebounced = debounce(syncLibraryToNas, SYNC_DEBOUNCE_MS);
+
+// 增量同步文库到 NAS：只传 updatedAt 晚于上次同步时间的文档
+async function syncLibraryToNas() {
+  if (!navigator.onLine) { setSyncDot('idle', '离线，待联网后补传'); return; }
+  const auth = localStorage.getItem('nas-auth');
+  if (!auth) { setSyncDot('idle', '未配置 NAS 凭据，跳过自动同步'); return; }
+  let authHeader = '';
+  try { authHeader = 'Basic ' + btoa(auth); } catch (_) { return; }
+
+  let docs = [];
+  try { docs = await idbGetAll(); } catch (_) { setSyncDot('error', '读取文库失败'); return; }
+  const state = loadSyncState();
+  const pending = docs.filter((d) => (d.updatedAt || 0) > (state[d.id] || 0));
+  if (!pending.length) { setSyncDot('ok', '已是最新'); return; }
+
+  setSyncDot('syncing', '正在同步 ' + pending.length + ' 篇到 NAS…');
+  let ok = 0, fail = 0;
+  for (const doc of pending) {
+    try {
+      const blob = new Blob([doc.content || ''], { type: 'text/markdown' });
+      if (blob.size > NAS_MAX_BYTES) { state[doc.id] = doc.updatedAt; ok++; continue; } // 超大跳过但标记已同步，避免反复尝试
+      const fd = new FormData();
+      fd.append('file', blob, doc.id + '.md');
+      const resp = await fetch(NAS_UPLOAD_URL, {
+        method: 'POST',
+        headers: { 'Authorization': authHeader },
+        body: fd
+      });
+      if (!resp.ok) { fail++; continue; }
+      state[doc.id] = doc.updatedAt;
+      ok++;
+    } catch (_) { fail++; }
+  }
+  saveSyncState(state);
+  if (fail === 0) setSyncDot('ok', '已同步 ' + ok + ' 篇到 NAS（' + new Date().toLocaleTimeString() + '）');
+  else setSyncDot('error', ok + ' 篇成功，' + fail + ' 篇失败（下次补传）');
+}
+
 /* 粘贴 knowly.want.biz 归档链接时自动从 NAS 下载并打开（仅整串为一个该域名链接、且非其它输入框时触发） */
 document.addEventListener('paste', (e) => {
   const dt = e.clipboardData || window.clipboardData;
@@ -1924,6 +1982,7 @@ function writebackLib() {
     setSaveState('saved', '✓ 已存文库');
     const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
     if (t) t.textContent = fmtTime(Date.now());
+    syncLibraryToNasDebounced();   // 文库改动后静默触发增量同步（去抖，不打断输入）
   }).catch(() => setSaveState('saved', '回写失败'));
 }
 
@@ -1982,3 +2041,13 @@ applyMdTheme(mdThemeMode);
 updateStats();
 updateGutter();
 updatePos();
+
+// 文库静默增量同步调度：联网即补传、定时兜底、持久化存储防清理
+window.addEventListener('online', () => syncLibraryToNas());
+window.addEventListener('offline', () => setSyncDot('idle', '离线'));
+syncLibraryToNas();                                  // 启动补传（无改动则秒过）
+setInterval(syncLibraryToNas, 3 * 60 * 1000);        // 每 3 分钟兜底
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().catch(() => {});       // 请求持久化，避免文库被浏览器当缓存清
+}
+setSyncDot('idle', 'NAS 自动同步已就绪');
