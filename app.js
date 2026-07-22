@@ -834,6 +834,34 @@ function aiErrorHint(err, endpoint) {
   }
   return m;
 }
+// 兼容流式(SSE)与非流式(JSON)两种响应：流式按 data: 行抽 delta.content，
+// 非流式读 choices[0].message.content。服务端可能忽略 stream:false 仍返回流。
+function extractAiContent(text) {
+  const trimmed = (text || '').trim();
+  if (trimmed.startsWith('data:')) {
+    let out = '';
+    for (const rawLine of trimmed.split('\n')) {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const j = JSON.parse(payload);
+        const ch = j.choices && j.choices[0];
+        if (ch && ch.delta && ch.delta.content) out += ch.delta.content;
+        else if (ch && ch.message && ch.message.content) out += ch.message.content;
+      } catch (_) { /* 忽略 keepalive / 非 JSON 行 */ }
+    }
+    return out.trim();
+  }
+  // 非流式 JSON
+  try {
+    const data = JSON.parse(trimmed);
+    return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+  } catch (e) {
+    throw new Error('返回既非 SSE 流也非合法 JSON：' + trimmed.slice(0, 80));
+  }
+}
 async function callAiApi(promptText, systemPrompt) {
   let cfg = readAiConfig();
   let apiKey = cfg.apiKey;
@@ -870,8 +898,8 @@ async function callAiApi(promptText, systemPrompt) {
       try { const j = await resp.json(); if (j && j.error) msg += '：' + (j.error.message || j.error); } catch (_) {}
       throw new Error(msg);
     }
-    const data = await resp.json();
-    return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+    const text = await resp.text();
+    return extractAiContent(text);
   } catch (e) {
     console.error(e);
     toast('AI 调用失败：' + aiErrorHint(e, endpoint), 'err', 6000);
