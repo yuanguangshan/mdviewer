@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- 背景圆角矩形（暗黑科技主题） -->
+  <rect width="512" height="512" rx="112" fill="#0f1115"/>
+
+  <!-- 渐变定义 -->
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+  </defs>
+
+  <!-- 抽象的“艹”字头：象征两页纸或向上生长的灵感 -->
+  <rect x="140" y="110" width="80" height="40" rx="8" fill="url(#grad1)"/>
+  <rect x="292" y="110" width="80" height="40" rx="8" fill="url(#grad1)"/>
+
+  <!-- 下半部分“夗”的现代科技线条演变：融合了结构与流动感 -->
+  <path d="M170 210h172c15 0 25 12 18 25l-45 80c-8 14-26 22-42 22h-58c-16 0-34-8-42-22l-45-80c-7-13 3-25 18-25z" fill="none" stroke="url(#grad2)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 核心点睛：象征 Markdown 光标闪烁或汇聚的中心点 -->
+  <circle cx="256" cy="350" r="18" fill="#ffffff"/>
+</svg>
