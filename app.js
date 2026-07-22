@@ -157,18 +157,19 @@ function setView(m) {
   $('#btnView').textContent = VIEW_LABEL[m];
   if (m !== 'preview') editor.focus();
 }
+// 是否手机布局（单列）：以实际 grid 为准，并用 matchMedia 兜底，保证手机只切「编辑/预览」
+function isMobileLayout() {
+  const g = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns;
+  return g === '1fr' || g === '1fr 0px' || window.matchMedia('(max-width: 760px)').matches;
+}
 function nextView() {
-  // 检测 workspace 是上下叠放（手机）还是左右分栏（桌面），而非用硬编码宽度
-  const gridCols = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns;
-  const isStacked = gridCols === '1fr' || gridCols === '1fr 0px';  // 单列 = 手机布局
-  const cycle = isStacked ? ['edit', 'preview'] : VIEW_CYCLE;
+  const cycle = isMobileLayout() ? ['edit', 'preview'] : VIEW_CYCLE;
   setView(cycle[(cycle.indexOf(viewMode) + 1) % cycle.length]);
 }
 $('#btnView').addEventListener('click', nextView);
 // 手机默认纯编辑（上下叠放时双屏没法用），桌面默认双栏
 {
-  const g = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns;
-  setView((g === '1fr' || g === '1fr 0px') ? 'edit' : 'split');
+  setView(isMobileLayout() ? 'edit' : 'split');
 }
 
 /* ---------- 同步滚动（编辑 ↔ 预览，仅双栏）---------- */
@@ -567,6 +568,7 @@ if ('serviceWorker' in navigator) {
 
 /* ---------- 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ---------- */
 function applyResponsive() {
+  if (isMobileLayout() && viewMode === 'split') setView('edit');   // 旋屏/缩窗进入手机布局时，若仍停在分屏则退回编辑（手机不分屏）
   renderEditorHighlight();   // 进入/离开移动端时重算覆盖层显隐（换行由用户偏好 applyWrap 控制）
 }
 window.addEventListener('resize', debounce(applyResponsive, 200));
