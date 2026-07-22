@@ -120,7 +120,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.20</span>
+      <span class="version">v1.11.21</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -192,16 +192,18 @@
     <div class="modal-box" role="dialog" aria-modal="true" aria-label="AI 设置">
       <div class="modal-title">✨ AI 设置（BYOK）</div>
       <p class="modal-desc">自带 Key：仅保存在本机浏览器，绝不上传到任何服务器。</p>
-      <label for="aiEndpoint">API 地址（兼容 OpenAI 格式）</label>
-      <input id="aiEndpoint" type="text" spellcheck="false" placeholder="https://api.openai.com/v1/chat/completions" />
-      <label for="aiModel">模型</label>
-      <input id="aiModel" type="text" spellcheck="false" placeholder="gpt-4o-mini / deepseek-chat" />
-      <label for="aiKey">API Key</label>
-      <input id="aiKey" type="password" spellcheck="false" placeholder="sk-... / 你的中转 Key" />
-      <div class="modal-actions">
-        <button id="aiSettingsCancel" type="button">取消</button>
-        <button id="aiSettingsSave" type="button" class="primary">保存</button>
-      </div>
+      <form id="aiSettingsForm" autocomplete="off" onsubmit="return false">
+        <label for="aiEndpoint">API 地址（兼容 OpenAI 格式）</label>
+        <input id="aiEndpoint" type="text" spellcheck="false" placeholder="https://api.openai.com/v1/chat/completions" />
+        <label for="aiModel">模型</label>
+        <input id="aiModel" type="text" spellcheck="false" placeholder="gpt-4o-mini / deepseek-chat" />
+        <label for="aiKey">API Key</label>
+        <input id="aiKey" type="password" spellcheck="false" placeholder="sk-... / 你的中转 Key" />
+        <div class="modal-actions">
+          <button id="aiSettingsCancel" type="button">取消</button>
+          <button id="aiSettingsSave" type="button" class="primary">保存</button>
+        </div>
+      </form>
     </div>
   </div>
 

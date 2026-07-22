@@ -781,6 +781,19 @@ const AI_CFG_KEY = 'md-ai-config';
 function readAiConfig() {
   try { return JSON.parse(localStorage.getItem(AI_CFG_KEY) || '{}'); } catch (_) { return {}; }
 }
+// 把 fetch 失败（CORS / 混合内容 / 网络）翻译成可操作的提示
+function aiErrorHint(err, endpoint) {
+  const m = (err && err.message) || String(err);
+  if (m.includes('Failed to fetch') || m.includes('NetworkError') || m.includes('CORS')) {
+    const tips = [];
+    if (location.protocol === 'https:' && /^http:\/\//i.test(endpoint || '')) {
+      tips.push('页面是 HTTPS，不能请求 HTTP 端点（混合内容被浏览器拦截），请改用 https://');
+    }
+    tips.push('端点未允许跨域（CORS）：需服务端返回 Access-Control-Allow-Origin，或经同源/代理转发');
+    return '网络或跨域被拦截。' + tips.join('；');
+  }
+  return m;
+}
 async function callAiApi(promptText, systemPrompt) {
   let cfg = readAiConfig();
   let apiKey = cfg.apiKey;
@@ -820,7 +833,7 @@ async function callAiApi(promptText, systemPrompt) {
     return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
   } catch (e) {
     console.error(e);
-    toast('AI 调用出错：' + e.message, 'err', 5000);
+    toast('AI 调用失败：' + aiErrorHint(e, endpoint), 'err', 6000);
     return null;
   }
 }
