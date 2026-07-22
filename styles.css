@@ -474,3 +474,94 @@ body.no-editor .editor-pane { display: none; }
 [data-md-theme="nord"] .markdown-body .hljs-symbol,
 [data-md-theme="nord"] .markdown-body .hljs-bullet,
 [data-md-theme="nord"] .markdown-body .hljs-link { color: #8fbcbb; }
+
+/* ---------- 文库：左侧抽屉 ---------- */
+.lib-toggle .lib-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  color: #fff; background: var(--accent); border-radius: 9px;
+}
+.lib-toggle .lib-count[hidden] { display: none; }
+
+/* 遮罩 */
+.lib-scrim {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0,0,0,.45); backdrop-filter: blur(1px);
+  opacity: 0; transition: opacity .2s ease;
+}
+.lib-scrim.show { opacity: 1; }
+
+/* 抽屉本体：从左侧滑入 */
+.lib-drawer {
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 100;
+  width: 320px; max-width: 86vw;
+  display: flex; flex-direction: column;
+  background: var(--bg-soft);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transform: translateX(-100%);
+  transition: transform .22s cubic-bezier(.4,0,.2,1);
+  will-change: transform;
+}
+.lib-drawer.open { transform: translateX(0); }
+
+.lib-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.lib-title { font-weight: 700; font-size: 15px; }
+.lib-close {
+  appearance: none; border: 0; background: transparent; color: var(--text-dim);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px; border-radius: 7px;
+}
+.lib-close:hover { color: var(--text); background: var(--bg-elev); }
+
+.lib-tools {
+  display: flex; gap: 8px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.lib-search {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text);
+  padding: 8px 11px; border-radius: 9px; font-size: 13px; outline: none;
+}
+.lib-search:focus { border-color: var(--accent-soft); }
+.lib-new { flex: 0 0 auto; white-space: nowrap; }
+
+.lib-list {
+  list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; min-height: 0;
+}
+.lib-item {
+  display: flex; align-items: stretch; gap: 4px;
+  padding: 4px; border-radius: 10px;
+}
+.lib-item:hover { background: var(--bg-elev); }
+.lib-item.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.lib-item-open {
+  flex: 1; min-width: 0; text-align: left;
+  display: flex; flex-direction: column; gap: 3px;
+  border: 0; background: transparent; color: var(--text);
+  padding: 8px 10px; border-radius: 8px; cursor: pointer;
+}
+.lib-item-open:hover { color: var(--accent-soft); }
+.lib-item-name {
+  font-size: 13.5px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.lib-item-time { font-size: 11px; color: var(--text-dim); }
+.lib-item-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.lib-act {
+  appearance: none; border: 0; background: transparent; color: var(--text-dim);
+  font-size: 13px; line-height: 1; cursor: pointer; padding: 6px 7px; border-radius: 7px;
+}
+.lib-act:hover { color: var(--accent-soft); background: var(--bg-soft); }
+
+.lib-empty {
+  padding: 28px 20px; text-align: center; color: var(--text-dim);
+  font-size: 13px; line-height: 1.6; flex: 1;
+}
+
+/* 全屏模式下文库入口隐藏（与工具栏一同隐藏），避免浮层遮挡 */
+body.fullscreen #btnLibrary { display: none; }

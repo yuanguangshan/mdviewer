@@ -269,6 +269,7 @@ function afterChange() {
   updateGutter();
   updatePos();
   saveDraft();
+  writebackLibDebounced();   // 文库文档：编辑后去抖自动回写（非文库文档时内部直接跳过）
 }
 editor.addEventListener('input', afterChange);
 ['keyup', 'click', 'select'].forEach((ev) => editor.addEventListener(ev, updatePos));
@@ -284,6 +285,8 @@ async function openFile() {
       currentFileHandle = handle;
       const file = await handle.getFile();
       currentName = file.name;
+      currentLibId = null;                       // 打开本地文件 → 脱离文库上下文
+      localStorage.removeItem('md-lib-current');
       editor.value = await file.text();
       updateFileName();
       afterChange();
@@ -302,6 +305,8 @@ fileInput.addEventListener('change', (e) => {
   reader.onload = () => {
     editor.value = reader.result;
     currentName = f.name;
+    currentLibId = null;                       // 导入本地文件 → 脱离文库上下文
+    localStorage.removeItem('md-lib-current');
     updateFileName();
     afterChange();
     flash('已打开 ' + currentName);
@@ -314,6 +319,12 @@ fileInput.addEventListener('change', (e) => {
 $('#btnSave').addEventListener('click', saveFile);
 async function saveFile() {
   const content = editor.value;
+  // 文库文档：内容已自动回写，Ctrl+S 仅作确认提示（仍可用「…」菜单导出 HTML/PDF）
+  if (currentLibId) {
+    writebackLib();
+    flash('已存至文库 ' + currentName);
+    return;
+  }
   // 1) 原地保存（File System Access API）
   if (currentFileHandle && currentFileHandle.createWritable) {
     try {
@@ -351,6 +362,8 @@ async function saveFile() {
 /* ---------- 新建 / 重命名 ---------- */
 $('#btnNew').addEventListener('click', async () => {
   if (editor.value.trim() && !confirm('新建文档？未保存的内容将丢失。')) return;
+  currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
+  localStorage.removeItem('md-lib-current');
   try {
     const text = await navigator.clipboard.readText();
     if (text) {
@@ -376,6 +389,7 @@ function renameFile() {
     currentName = n.trim();
     updateFileName();
     saveDraft();
+    if (currentLibId) writebackLib();   // 文库文档：同步新文件名
   }
 }
 
@@ -602,9 +616,228 @@ function applyResponsive() {
 window.addEventListener('resize', debounce(applyResponsive, 200));
 applyResponsive();
 
+/* ---------- 文库（本地文档库，IndexedDB 持久化；打开文档后编辑自动回写）---------- */
+let currentLibId = null;   // 当前打开的文库文档 id（非文库文档时为 null）
+
+const LIB_DB = 'md-library';
+const LIB_STORE = 'docs';
+let libDb = null;
+
+function openLibDb() {
+  return new Promise((resolve, reject) => {
+    if (libDb) return resolve(libDb);
+    if (!('indexedDB' in window)) return reject(new Error('IndexedDB 不可用'));
+    const req = indexedDB.open(LIB_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(LIB_STORE)) {
+        db.createObjectStore(LIB_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => { libDb = req.result; resolve(libDb); };
+    req.onerror = () => reject(req.error);
+  });
+}
+function libStore(mode) { return libDb.transaction(LIB_STORE, mode).objectStore(LIB_STORE); }
+function idbReq(fn) {
+  return new Promise((res, rej) => {
+    const r = fn();
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+const idbGetAll = () => idbReq(() => libStore('readonly').getAll());
+const idbGet = (id) => idbReq(() => libStore('readonly').get(id));
+const idbPut = (doc) => idbReq(() => libStore('readwrite').put(doc));
+const idbDelete = (id) => idbReq(() => libStore('readwrite').delete(id));
+
+function genId() { return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function fmtTime(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return '刚刚';
+  if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+  if (diff < 86400000 * 7) return Math.floor(diff / 86400000) + ' 天前';
+  try { return new Date(ts).toLocaleDateString('zh-CN'); } catch (_) { return ''; }
+}
+
+/* 抽屉开关 */
+const libDrawer = $('#libDrawer');
+const libScrim = $('#libScrim');
+const libBtn = $('#btnLibrary');
+function openLibrary() {
+  libScrim.hidden = false;
+  requestAnimationFrame(() => libScrim.classList.add('show'));   // 触发淡入
+  libDrawer.classList.add('open');
+  libDrawer.setAttribute('aria-hidden', 'false');
+  libBtn.setAttribute('aria-expanded', 'true');
+  renderLibrary();
+  setTimeout(() => { const s = $('#libSearch'); if (s) s.focus(); }, 120);
+}
+function closeLibrary() {
+  libDrawer.classList.remove('open');
+  libDrawer.setAttribute('aria-hidden', 'true');
+  libBtn.setAttribute('aria-expanded', 'false');
+  libScrim.classList.remove('show');
+  setTimeout(() => { libScrim.hidden = true; }, 200);
+}
+function toggleLibrary() { libDrawer.classList.contains('open') ? closeLibrary() : openLibrary(); }
+if (libBtn) libBtn.addEventListener('click', toggleLibrary);
+$('#libClose').addEventListener('click', closeLibrary);
+if (libScrim) libScrim.addEventListener('click', closeLibrary);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
+});
+
+/* 渲染列表 */
+const libList = $('#libList');
+const libEmpty = $('#libEmpty');
+const libCount = $('#libCount');
+const libSearch = $('#libSearch');
+let libDocsCache = [];
+
+async function renderLibrary() {
+  if (!libDb) return;
+  try { libDocsCache = await idbGetAll(); } catch (_) { libDocsCache = []; }
+  libDocsCache.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const kw = (libSearch.value || '').trim().toLowerCase();
+  const shown = kw ? libDocsCache.filter((d) => (d.name || '').toLowerCase().includes(kw)) : libDocsCache;
+  libList.innerHTML = '';
+  shown.forEach((d) => {
+    const li = document.createElement('li');
+    li.className = 'lib-item' + (d.id === currentLibId ? ' active' : '');
+    li.dataset.id = d.id;
+    const open = document.createElement('button');
+    open.className = 'lib-item-open';
+    open.innerHTML = '<span class="lib-item-name"></span><span class="lib-item-time"></span>';
+    open.querySelector('.lib-item-name').textContent = d.name || '未命名.md';
+    open.querySelector('.lib-item-time').textContent = fmtTime(d.updatedAt || Date.now());
+    const acts = document.createElement('span');
+    acts.className = 'lib-item-actions';
+    acts.innerHTML = '<button class="lib-act" data-act="rename" title="重命名">✏️</button>'
+      + '<button class="lib-act" data-act="delete" title="删除">🗑</button>';
+    li.appendChild(open);
+    li.appendChild(acts);
+    libList.appendChild(li);
+  });
+  libEmpty.hidden = libDocsCache.length > 0;
+  if (libCount) {
+    libCount.textContent = String(libDocsCache.length);
+    libCount.hidden = libDocsCache.length === 0;
+  }
+}
+
+/* 打开文库文档 → 载入编辑器，后续编辑自动回写 */
+function openLibDocData(doc) {
+  currentLibId = doc.id;
+  currentFileHandle = null;
+  currentName = doc.name || '未命名.md';
+  editor.value = doc.content || '';
+  localStorage.setItem('md-lib-current', doc.id);
+  updateFileName();
+  afterChange();
+  setSaveState('saved', '✓ 文库');
+  renderLibrary();
+}
+async function openLibDoc(id) {
+  try {
+    const doc = await idbGet(id);
+    if (!doc) { renderLibrary(); return; }
+    openLibDocData(doc);
+  } catch (_) { flash('打开失败'); }
+}
+libList.addEventListener('click', (e) => {
+  const item = e.target.closest('.lib-item');
+  if (!item) return;
+  const id = item.dataset.id;
+  const actBtn = e.target.closest('.lib-act');
+  if (actBtn) {
+    const act = actBtn.dataset.act;
+    if (act === 'rename') renameLibDoc(id);
+    else if (act === 'delete') deleteLibDoc(id);
+    return;
+  }
+  openLibDoc(id);
+});
+if (libSearch) libSearch.addEventListener('input', debounce(renderLibrary, 150));
+
+/* 新建文库文档 */
+async function newLibDoc() {
+  const doc = { id: genId(), name: '未命名.md', content: '', updatedAt: Date.now() };
+  try {
+    await idbPut(doc);
+    openLibDocData(doc);
+    if (editor) editor.focus();
+    renderLibrary();
+    flash('已新建（文库）');
+  } catch (_) { flash('新建失败'); }
+}
+$('#libNew').addEventListener('click', newLibDoc);
+
+/* 重命名 / 删除 */
+async function renameLibDoc(id) {
+  const doc = await idbGet(id).catch(() => null);
+  if (!doc) return;
+  const n = prompt('文件名：', doc.name || '未命名.md');
+  if (!n || !n.trim()) return;
+  doc.name = n.trim();
+  doc.updatedAt = Date.now();
+  try { await idbPut(doc); } catch (_) {}
+  if (id === currentLibId) { currentName = doc.name; updateFileName(); }
+  renderLibrary();
+  flash('已重命名');
+}
+async function deleteLibDoc(id) {
+  const doc = await idbGet(id).catch(() => null);
+  if (!confirm('删除「' + (doc ? doc.name : '该文档') + '」？此操作不可恢复。')) return;
+  try { await idbDelete(id); } catch (_) {}
+  if (id === currentLibId) {
+    currentLibId = null;
+    localStorage.removeItem('md-lib-current');
+    currentFileHandle = null;
+    currentName = '未命名.md';
+    editor.value = '';
+    localStorage.removeItem('md-draft');   // 清掉旧草稿，避免删除后内容在重载时复活
+    localStorage.removeItem('md-name');
+    updateFileName();
+    renderMarkdown(); updateStats(); updateGutter(); updatePos();   // 刷新空视图（不触发草稿写入）
+    setSaveState('', '就绪');
+  }
+  renderLibrary();
+  flash('已删除');
+}
+
+/* 自动回写：打开文库文档后，每次编辑去抖写入 IndexedDB */
+const writebackLibDebounced = debounce(() => { writebackLib(); }, 800);
+function writebackLib() {
+  if (!currentLibId || !libDb) return;
+  const doc = { id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now() };
+  idbPut(doc).then(() => {
+    setSaveState('saved', '✓ 已存文库');
+    const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
+    if (t) t.textContent = fmtTime(doc.updatedAt);
+  }).catch(() => setSaveState('saved', '回写失败'));
+}
+
 /* ---------- 初始化 ---------- */
+async function initLibrary() {
+  try {
+    await openLibDb();
+  } catch (e) {
+    loadDraft();   // IndexedDB 不可用 → 退回草稿
+    return;
+  }
+  const curId = localStorage.getItem('md-lib-current');
+  if (curId) {
+    try {
+      const doc = await idbGet(curId);
+      if (doc) { openLibDocData(doc); return; }   // 恢复上次文库文档（含自动回写上下文）
+    } catch (_) {}
+  }
+  loadDraft();     // 无文库上下文 → 加载草稿
+}
 setSaveState('', '就绪');
-loadDraft();
+initLibrary();
 renderMarkdown();
 applyWrap();            // 设置换行模式（默认软换行）+ 渲染覆盖层
 applyMdTheme(mdThemeMode);
