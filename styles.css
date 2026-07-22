@@ -82,10 +82,14 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 }
 .btn:hover { border-color: var(--accent-soft); color: var(--accent-soft); }
 .btn:active { transform: translateY(1px); }
+/* 次级图标按钮：默认幽灵态（透明底），hover 才显底，降低视觉噪声、突出主操作 */
+.btn.icon { padding: 7px 10px; font-size: 15px; background: transparent; border-color: transparent; }
+.btn.icon:hover { background: var(--bg-elev); border-color: var(--border); color: var(--accent-soft); }
+/* 视图切换：单按钮循环（手机只占一格，绝不拆成 3 段），做成轻微凸起的小胶囊 */
+.btn.view { min-width: 52px; text-align: center; background: var(--bg-elev); border-color: var(--border); font-weight: 600; }
+.btn.view:hover { border-color: var(--accent-soft); color: var(--accent-soft); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { background: var(--accent-soft); color: #fff; }
-.btn.icon { padding: 7px 10px; font-size: 15px; }
-.btn.view { min-width: 52px; text-align: center; }
 .sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; flex: 0 0 auto; }
 .stat { color: var(--text-dim); font-size: 12px; margin-left: 4px; white-space: nowrap; }
 
@@ -104,6 +108,9 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 }
 .menu button:hover { background: var(--bg-soft); color: var(--accent-soft); }
 .menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+/* 菜单弹出：轻微淡入 + 上移，更顺滑 */
+.menu:not([hidden]) { animation: menuIn .09s ease-out; }
+@keyframes menuIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
 /* ---------- Workspace split ---------- */
 .workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
@@ -235,6 +242,21 @@ body.no-editor .editor-pane { display: none; }
   }
 }
 
+/* ---------- 细滚动条（跟随主题） ---------- */
+.editor-wrap, .preview-pane, .lib-list, .menu, .workspace { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.editor-wrap::-webkit-scrollbar, .preview-pane::-webkit-scrollbar, .lib-list::-webkit-scrollbar, .menu::-webkit-scrollbar {
+  width: 8px; height: 8px;
+}
+.editor-wrap::-webkit-scrollbar-thumb, .preview-pane::-webkit-scrollbar-thumb, .lib-list::-webkit-scrollbar-thumb, .menu::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 8px;
+}
+.editor-wrap::-webkit-scrollbar-thumb:hover, .preview-pane::-webkit-scrollbar-thumb:hover, .lib-list::-webkit-scrollbar-thumb:hover, .menu::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+.editor-wrap::-webkit-scrollbar-track, .preview-pane::-webkit-scrollbar-track, .lib-list::-webkit-scrollbar-track, .menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ---------- Mobile ---------- */
 @media (max-width: 760px) {
   .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
@@ -257,6 +279,15 @@ body.no-editor .editor-pane { display: none; }
   .statusbar #fileName { flex: 0 1 50%; max-width: 50%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .statusbar #posInfo { flex: 0 0 auto; margin-left: auto; }
   .preview { padding: 16px; }
+}
+/* 超窄屏（≤400px）：进一步收紧，防工具栏溢出 */
+@media (max-width: 400px) {
+  .toolbar { padding: 7px 8px; gap: 6px; }
+  .toolbar-left { gap: 4px; }
+  .actions { gap: 4px; }
+  .btn, .btn.icon, .btn.view { padding-left: 8px; padding-right: 8px; }
+  .lib-count { display: none; }
+  .brand-logo { width: 22px; height: 22px; }
 }
 
 /* ============================================================
@@ -526,6 +557,28 @@ body.no-editor .editor-pane { display: none; }
   font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px; border-radius: 7px;
 }
 .lib-close:hover { color: var(--text); background: var(--bg-elev); }
+.lib-head-right { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+/* 音乐播放器开关 */
+.lib-music-toggle {
+  appearance: none; border: 0; background: transparent; color: var(--text-dim);
+  font-size: 15px; line-height: 1; cursor: pointer; padding: 5px 7px; border-radius: 7px;
+  transition: color .15s, background .15s;
+}
+.lib-music-toggle:hover { color: var(--accent-soft); background: var(--bg-elev); }
+.lib-music-toggle.active { color: var(--accent-soft); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* 抽屉底部内嵌音乐播放器（可折叠） */
+.lib-music {
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  border-top: 1px solid var(--border); background: var(--bg-soft);
+}
+.lib-music-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px; font-size: 12px; color: var(--text-dim); flex: 0 0 auto;
+}
+.lib-music-ext { color: var(--accent-soft); text-decoration: none; font-size: 11px; }
+.lib-music-ext:hover { text-decoration: underline; }
+.lib-music-frame { width: 100%; flex: 1; min-height: 210px; border: 0; display: block; background: var(--bg); }
 
 .lib-tools {
   display: flex; gap: 8px; padding: 12px 16px;
@@ -548,7 +601,16 @@ body.no-editor .editor-pane { display: none; }
   padding: 4px; border-radius: 10px;
 }
 .lib-item:hover { background: var(--bg-elev); }
-.lib-item.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.lib-item.active { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+/* 文档头像：首字母色块，无图也好看 */
+.lib-avatar {
+  flex: 0 0 auto; align-self: center;
+  width: 30px; height: 30px; border-radius: 8px; margin-left: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-soft));
+  user-select: none;
+}
 .lib-item-open {
   flex: 1; min-width: 0; text-align: left;
   display: flex; flex-direction: column; gap: 3px;
@@ -569,9 +631,23 @@ body.no-editor .editor-pane { display: none; }
 .lib-act:hover { color: var(--accent-soft); background: var(--bg-soft); }
 
 .lib-empty {
-  padding: 28px 20px; text-align: center; color: var(--text-dim);
+  padding: 22px 20px 18px; text-align: center; color: var(--text-dim);
   font-size: 13px; line-height: 1.6; flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
 }
+.lib-empty p { margin: 0; font-weight: 600; color: var(--text); }
+.lib-empty span { font-size: 12px; max-width: 220px; }
+.lib-empty-art { margin-bottom: 2px; opacity: .92; }
+
+/* 抽屉底部栏：篇数 + 隐私提示，收口下方留白 */
+.lib-foot {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 16px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-dim); background: var(--bg-soft);
+}
+.lib-foot-count { font-weight: 600; color: var(--text); }
+.lib-foot-note { display: inline-flex; align-items: center; gap: 4px; }
 
 /* 全屏模式下文库入口隐藏（与工具栏一同隐藏），避免浮层遮挡 */
 body.fullscreen #btnLibrary { display: none; }

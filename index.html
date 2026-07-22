@@ -88,7 +88,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.3</span>
+      <span class="version">v1.11.4</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -102,7 +102,10 @@
         <div class="lib-title">📚 文库</div>
         <span class="lib-subtitle">苑广山的在线文库</span>
       </div>
-      <button class="lib-close" id="libClose" title="关闭" aria-label="关闭文库">✕</button>
+      <div class="lib-head-right">
+        <button class="lib-music-toggle" id="libMusicToggle" title="音乐播放器" aria-label="音乐播放器" aria-expanded="false">🎵</button>
+        <button class="lib-close" id="libClose" title="关闭" aria-label="关闭文库">✕</button>
+      </div>
     </div>
     <div class="lib-tools">
       <input class="lib-search" id="libSearch" type="search" placeholder="搜索文档…" aria-label="搜索文库文档" />
@@ -110,7 +113,34 @@
       <button class="btn lib-upload" id="libUpload" title="上传本地文档到文库" aria-label="上传文档">⬆️ 上传</button>
     </div>
     <ul class="lib-list" id="libList"></ul>
-    <div class="lib-empty" id="libEmpty" hidden>文库还是空的，点「＋ 新建」开始第一篇。</div>
+    <div class="lib-empty" id="libEmpty" hidden>
+      <svg class="lib-empty-art" viewBox="0 0 120 120" width="92" height="92" aria-hidden="true">
+        <defs><linearGradient id="libArt" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#818cf8"/><stop offset="1" stop-color="#4f46e5"/>
+        </linearGradient></defs>
+        <circle cx="60" cy="60" r="48" fill="rgba(99,102,241,.12)"/>
+        <rect x="40" y="32" width="40" height="56" rx="7" fill="url(#libArt)"/>
+        <rect x="40" y="32" width="40" height="56" rx="7" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5"/>
+        <g stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".92">
+          <line x1="50" y1="48" x2="70" y2="48"/>
+          <line x1="50" y1="60" x2="70" y2="60"/>
+          <line x1="50" y1="72" x2="62" y2="72"/>
+        </g>
+      </svg>
+      <p>文库还是空的</p>
+      <span>点「＋ 新建」开始第一篇，或「⬆️ 上传」导入本地文档。</span>
+    </div>
+    <div class="lib-music" id="libMusic" hidden>
+      <div class="lib-music-head">
+        <span>🎵 音乐</span>
+        <a class="lib-music-ext" href="https://wealth.want.biz/music/index.html" target="_blank" rel="noopener">新标签打开 ↗</a>
+      </div>
+      <iframe class="lib-music-frame" src="https://wealth.want.biz/music/index.html" title="音乐播放器" loading="lazy" allow="autoplay; encrypted-media; fullscreen" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <footer class="lib-foot">
+      <span class="lib-foot-count">共 <span id="libFootCount">0</span> 篇</span>
+      <span class="lib-foot-note">🔒 本地保存 · 不上传</span>
+    </footer>
   </aside>
   <input type="file" id="libFileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden />
 

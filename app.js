@@ -709,10 +709,21 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
 });
 
+/* 文库内嵌音乐播放器：折叠开关 */
+const libMusic = $('#libMusic');
+const libMusicToggle = $('#libMusicToggle');
+if (libMusicToggle) libMusicToggle.addEventListener('click', () => {
+  const open = libMusic.hidden;
+  libMusic.hidden = !open;
+  libMusicToggle.setAttribute('aria-expanded', String(open));
+  libMusicToggle.classList.toggle('active', open);
+});
+
 /* 渲染列表 */
 const libList = $('#libList');
 const libEmpty = $('#libEmpty');
 const libCount = $('#libCount');
+const libFootCount = $('#libFootCount');
 const libSearch = $('#libSearch');
 let libDocsCache = [];
 
@@ -727,6 +738,9 @@ async function renderLibrary() {
     const li = document.createElement('li');
     li.className = 'lib-item' + (d.id === currentLibId ? ' active' : '');
     li.dataset.id = d.id;
+    const avatar = document.createElement('span');
+    avatar.className = 'lib-avatar';
+    avatar.textContent = (d.name || '未').trim().charAt(0).toUpperCase();
     const open = document.createElement('button');
     open.className = 'lib-item-open';
     open.innerHTML = '<span class="lib-item-name"></span><span class="lib-item-time"></span>';
@@ -737,6 +751,7 @@ async function renderLibrary() {
     acts.innerHTML = '<button class="lib-act" data-act="download" title="下载为 .md">⬇️</button>'
       + '<button class="lib-act" data-act="rename" title="重命名">✏️</button>'
       + '<button class="lib-act" data-act="delete" title="删除">🗑</button>';
+    li.appendChild(avatar);
     li.appendChild(open);
     li.appendChild(acts);
     libList.appendChild(li);
@@ -746,6 +761,7 @@ async function renderLibrary() {
     libCount.textContent = String(libDocsCache.length);
     libCount.hidden = libDocsCache.length === 0;
   }
+  if (libFootCount) libFootCount.textContent = String(libDocsCache.length);
 }
 
 /* 打开文库文档 → 载入编辑器，后续编辑自动回写 */
