@@ -108,6 +108,17 @@ function syncHighlightScroll() {
   editorHighlight.scrollLeft = editor.scrollLeft;
 }
 
+/* ---------- 编辑器换行：开=软换行（无横向滚动、隐藏行号）；关=不换行（保留行号逐行对齐）---------- */
+let wrapMode = localStorage.getItem('md-wrap') !== 'off';
+function applyWrap() {
+  editor.wrap = wrapMode ? 'soft' : 'off';
+  editor.parentElement.classList.toggle('wrap-on', wrapMode);
+  const bw = $('#menuWrap');
+  if (bw) bw.textContent = '↩️ 换行：' + (wrapMode ? '开' : '关');
+  renderEditorHighlight();
+  syncHighlightScroll();
+}
+
 /* ---------- 统计 / 行号 / 光标位置 ---------- */
 function updateStats() {
   const t = editor.value;
@@ -465,6 +476,7 @@ moreMenu.addEventListener('click', (e) => {
   else if (act === 'copy') copyHTML();
   else if (act === 'html') exportHTML();
   else if (act === 'pdf') exportPDF();
+  else if (act === 'wrap') { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }
   else if (act === 'theme') applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]);
   else if (act === 'mdtheme') applyMdTheme(btn.dataset.val);
 });
@@ -555,9 +567,7 @@ if ('serviceWorker' in navigator) {
 
 /* ---------- 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ---------- */
 function applyResponsive() {
-  const narrow = window.innerWidth <= 760;
-  editor.wrap = narrow ? 'soft' : 'off';
-  renderEditorHighlight();   // 进入/离开移动端时重算覆盖层显隐
+  renderEditorHighlight();   // 进入/离开移动端时重算覆盖层显隐（换行由用户偏好 applyWrap 控制）
 }
 window.addEventListener('resize', debounce(applyResponsive, 200));
 applyResponsive();
@@ -566,7 +576,7 @@ applyResponsive();
 setSaveState('', '就绪');
 loadDraft();
 renderMarkdown();
-renderEditorHighlight();
+applyWrap();            // 设置换行模式（默认软换行）+ 渲染覆盖层
 applyMdTheme(mdThemeMode);
 updateStats();
 updateGutter();
