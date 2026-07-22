@@ -177,6 +177,11 @@ const btnFullscreen = $('#btnFullscreen');
 const btnExitFullscreen = $('#btnExitFullscreen');
 function setFullscreen(on) {
   document.body.classList.toggle('fullscreen', on);
+  if (btnExitFullscreen) btnExitFullscreen.hidden = !on;   // 用 hidden 属性显隐，默认隐藏（不依赖外部 CSS）
+  // 兜底：直接控制 chrome 显隐，即使样式未及时更新也能全屏
+  const tb = document.querySelector('.toolbar'), sb = document.querySelector('.statusbar');
+  if (tb) tb.style.display = on ? 'none' : '';
+  if (sb) sb.style.display = on ? 'none' : '';
   if (on) {
     const el = document.documentElement;
     if (el.requestFullscreen) { try { el.requestFullscreen(); } catch (_) {} }   // iOS 非视频不支持→仅应用级全屏
@@ -188,7 +193,7 @@ if (btnFullscreen) btnFullscreen.addEventListener('click', () => setFullscreen(t
 if (btnExitFullscreen) btnExitFullscreen.addEventListener('click', () => setFullscreen(false));
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && document.body.classList.contains('fullscreen')) {
-    document.body.classList.remove('fullscreen');   // 原生全屏被 Esc 退出时同步应用状态
+    setFullscreen(false);   // 原生全屏被 Esc 退出时同步（含 hidden / 内联样式复位）
   }
 });
 document.addEventListener('keydown', (e) => {
