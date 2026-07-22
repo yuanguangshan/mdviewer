@@ -177,6 +177,7 @@ body.no-editor .editor-pane { display: none; }
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 8px 12px; }
 .markdown-body th { background: var(--bg-elev); }
 .markdown-body img { max-width: 100%; border-radius: 8px; }
+.markdown-body img.broken { opacity: .35; filter: grayscale(1); }
 .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
 .markdown-body ul, .markdown-body ol { padding-left: 1.6em; }
 .markdown-body li { margin: .3em 0; }

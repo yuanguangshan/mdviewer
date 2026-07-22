@@ -28,6 +28,25 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 }
 
+/* ---------- DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用）---------- */
+if (window.DOMPurify) {
+  DOMPurify.addHook('beforeSanitizeAttributes', (node) => {
+    if (node.tagName === 'IMG') {
+      const src = node.getAttribute('src') || '';
+      if (src.startsWith('libimg://')) {
+        node.setAttribute('data-libimg', src.slice('libimg://'.length));
+        node.removeAttribute('src');
+      }
+    }
+  });
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'IMG' && node.hasAttribute('data-libimg')) {
+      node.setAttribute('src', 'libimg://' + node.getAttribute('data-libimg'));
+      node.removeAttribute('data-libimg');
+    }
+  });
+}
+
 /* ---------- 主题：auto / light / dark，auto 跟随系统 ---------- */
 const THEME_CYCLE = ['auto', 'light', 'dark'];
 const THEME_ICON = { auto: '🌓', light: '☀️', dark: '🌙' };
@@ -118,7 +137,103 @@ function renderMarkdown() {
       console.warn('Mermaid 渲染失败:', e);
     }
   }
+  // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
+  headingLineMap = buildHeadingMap(editor.value);
+  preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
+    const id = slugify(h.textContent);
+    if (id) h.id = id;   // 始终以 slug 为 id，保证与 buildHeadingMap 一致、锚点可跳转
+  });
+  lastSanitizedHtml = preview.innerHTML;   // 快照（含 libimg:// 引用，供导出时内联为 data URL）
+  // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
+  resolveImages();
 }
+
+/* ---------- 锚点同步滚动辅助 ---------- */
+let lastSanitizedHtml = '';
+let headingLineMap = new Map();
+let anchorNavLock = 0;
+function slugify(text) {
+  return String(text).trim().toLowerCase()
+    .replace(/[^\w一-龥\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+function buildHeadingMap(src) {
+  const map = new Map();
+  src.split('\n').forEach((line, i) => {
+    const m = line.match(/^#{1,6}\s+(.*)$/);
+    if (m) {
+      const slug = slugify(m[1]);
+      if (slug && !map.has(slug)) map.set(slug, i);
+    }
+  });
+  return map;
+}
+function scrollEditorToLine(line) {
+  const lines = editor.value.split('\n');
+  let pos = 0;
+  for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
+  const lh = parseFloat(getComputedStyle(editor).lineHeight) || 25;
+  if (viewMode !== 'preview') {
+    editor.scrollTop = Math.max(0, line * lh - editor.clientHeight / 3);
+    syncHighlightScroll();
+  }
+  editor.selectionStart = editor.selectionEnd = pos;
+  if (viewMode !== 'preview') editor.focus();
+}
+function onPreviewAnchorClick(e) {
+  const a = e.target.closest('a');
+  if (!a) return;
+  const href = a.getAttribute('href') || '';
+  if (!href.startsWith('#') || href.length < 2) return;
+  const slug = href.slice(1);
+  const heading = preview.getElementById(slug);
+  if (!heading) return;
+  anchorNavLock = Date.now() + 450;   // 避免与比例同步滚动互相打架
+  if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
+}
+
+/* ---------- Blob 图片：入库 + 解析 ---------- */
+let imgUrlCache = new Map();   // id -> { blob }
+let activeImgUrls = new Set();
+function blobToDataURL(blob) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
+}
+function resolveImages() {
+  if (!libDb) return;
+  const imgs = preview.querySelectorAll('img[src^="libimg://"]');
+  if (!imgs.length) return;
+  const newUrls = new Set();
+  const pending = [];
+  imgs.forEach((img) => {
+    const id = img.getAttribute('src').slice('libimg://'.length);
+    pending.push((async () => {
+      let entry = imgUrlCache.get(id);
+      if (!entry) {
+        try {
+          const rec = await idbGetImage(id);
+          if (!rec || !rec.blob) { img.classList.add('broken'); return; }
+          entry = { blob: rec.blob };
+          imgUrlCache.set(id, entry);
+        } catch (_) { img.classList.add('broken'); return; }
+      }
+      const url = URL.createObjectURL(entry.blob);
+      newUrls.add(url);
+      img.src = url;
+      img.classList.remove('broken');
+    })());
+  });
+  Promise.all(pending).then(() => {
+    activeImgUrls.forEach((u) => { if (!newUrls.has(u)) URL.revokeObjectURL(u); });
+    activeImgUrls = newUrls;
+  });
+}
+
 function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(renderMarkdown, 120);
@@ -243,6 +358,7 @@ document.addEventListener('keydown', (e) => {
 let isSyncing = false;
 function syncScroll(src, dst) {
   if (isSyncing || viewMode !== 'split') return;
+  if (Date.now() < anchorNavLock) return;   // 锚点跳转期间暂停比例同步，避免互相拉扯
   const sMax = src.scrollHeight - src.clientHeight;
   const dMax = dst.scrollHeight - dst.clientHeight;
   if (dMax <= 0) return;
@@ -257,6 +373,7 @@ editor.addEventListener('scroll', () => {
   syncScroll(editor, previewPane);
 });
 previewPane.addEventListener('scroll', () => syncScroll(previewPane, editor));
+preview.addEventListener('click', onPreviewAnchorClick);   // 预览内点击 #锚点 → 同步滚动编辑器到对应行
 
 /* ---------- 草稿自动保存（去抖 + 静默 + 容错）---------- */
 let curSaveClass = '';
@@ -513,10 +630,24 @@ async function exportMarkdown() {
   download(name, editor.value, 'text/markdown;charset=utf-8');
   flash('已导出 Markdown');
 }
-function exportHTML() {
+async function exportHTML() {
+  let html = lastSanitizedHtml || preview.innerHTML;
+  // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
+  if (libDb) {
+    const ids = [...new Set([...html.matchAll(/libimg:\/\/([a-z0-9]+)/gi)].map((m) => m[1]))];
+    for (const id of ids) {
+      try {
+        const rec = await idbGetImage(id);
+        if (rec && rec.blob) {
+          const dataUrl = await blobToDataURL(rec.blob);
+          html = html.split('src="libimg://' + id + '"').join('src="' + dataUrl + '"');
+        }
+      } catch (_) {}
+    }
+  }
   const doc = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'
     + escapeHtml(currentName) + '</title><style>' + EXPORT_CSS + '</style></head><body class="markdown-body">'
-    + preview.innerHTML + '</body></html>';
+    + html + '</body></html>';
   download(currentName.replace(/\.(md|markdown|txt)$/i, '') + '.html', doc, 'text/html;charset=utf-8');
   flash('已导出 HTML');
 }
@@ -614,10 +745,24 @@ function insertAtCursor(text) {
 async function insertImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
   if (file.size > 2 * 1024 * 1024) {
-    if (!confirm('图片较大（' + Math.round(file.size / 1024) + ' KB），转 base64 会显著增大文档，继续？')) return;
+    if (!confirm('图片较大（' + Math.round(file.size / 1024) + ' KB），将作为 Blob 存入文库（不占正文体积），继续？')) return;
   }
-  const url = await fileToDataURL(file);
-  insertAtCursor('\n![' + (file.name || 'image') + '](' + url + ')\n');
+  // 文库不可用（无 IndexedDB）→ 回退 base64 内联，保证可用
+  if (!libDb) {
+    const url = await fileToDataURL(file);
+    insertAtCursor('\n![' + (file.name || 'image') + '](' + url + ')\n');
+    flash('已插入图片');
+    return;
+  }
+  // 正文只存 libimg://<id> 引用，图片 Blob 单独入库，文档体积与同步开销大幅下降
+  const id = genId();
+  try {
+    await idbPutImage({ id, name: file.name || 'image', type: file.type, blob: file });
+  } catch (_) {
+    flash('图片入库失败');
+    return;
+  }
+  insertAtCursor('\n![' + (file.name || 'image') + '](libimg://' + id + ')\n');
   flash('已插入图片');
 }
 editor.addEventListener('paste', (e) => {
@@ -651,13 +796,23 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-/* ---------- 全局快捷键 ---------- */
+/* ---------- 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"）---------- */
+const SHORTCUTS = new Map([
+  ['mod+s', saveFile],
+  ['mod+o', openFile],
+  ['mod+alt+n', () => { const b = $('#btnNew'); if (b) b.click(); }],
+  // 后续新增快捷键只需在此追加一行，无需改动分发逻辑
+]);
 document.addEventListener('keydown', (e) => {
-  const mod = e.ctrlKey || e.metaKey;
+  const parts = [];
+  if (e.ctrlKey || e.metaKey) parts.push('mod');
+  if (e.altKey) parts.push('alt');
+  if (e.shiftKey) parts.push('shift');
   const k = e.key.toLowerCase();
-  if (mod && k === 's') { e.preventDefault(); saveFile(); }
-  else if (mod && k === 'o') { e.preventDefault(); openFile(); }
-  else if (mod && e.altKey && k === 'n') { e.preventDefault(); $('#btnNew').click(); }
+  if (['control', 'meta', 'alt', 'shift', 'tab'].includes(k)) return;   // 忽略纯修饰键 / Tab 由编辑器处理
+  parts.push(k);
+  const handler = SHORTCUTS.get(parts.join('+'));
+  if (handler) { e.preventDefault(); handler(); }
 });
 
 /* ---------- 注册 Service Worker（PWA 离线 / 可安装）---------- */
@@ -686,11 +841,14 @@ function openLibDb() {
   return new Promise((resolve, reject) => {
     if (libDb) return resolve(libDb);
     if (!('indexedDB' in window)) return reject(new Error('IndexedDB 不可用'));
-    const req = indexedDB.open(LIB_DB, 1);
+    const req = indexedDB.open(LIB_DB, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(LIB_STORE)) {
         db.createObjectStore(LIB_STORE, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('images')) {
+        db.createObjectStore('images', { keyPath: 'id' });   // 图片 Blob 单独入库，正文只存 libimg://<id>
       }
     };
     req.onsuccess = () => { libDb = req.result; resolve(libDb); };
@@ -709,6 +867,12 @@ const idbGetAll = () => idbReq(() => libStore('readonly').getAll());
 const idbGet = (id) => idbReq(() => libStore('readonly').get(id));
 const idbPut = (doc) => idbReq(() => libStore('readwrite').put(doc));
 const idbDelete = (id) => idbReq(() => libStore('readwrite').delete(id));
+
+/* 图片 Blob 库（独立于 docs，避免大体积拖慢文档读写） */
+const IMG_STORE = 'images';
+function imgStore(mode) { return libDb.transaction(IMG_STORE, mode).objectStore(IMG_STORE); }
+const idbGetImage = (id) => idbReq(() => imgStore('readonly').get(id));
+const idbPutImage = (rec) => idbReq(() => imgStore('readwrite').put(rec));
 
 function genId() { return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function fmtTime(ts) {
