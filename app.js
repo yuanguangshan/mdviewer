@@ -84,12 +84,65 @@ function applyMdTheme(mode) {
 
 /* ---------- 渲染 + 代码高亮 ---------- */
 let renderTimer = null;
+// 懒加载大体积第三方库（避免首屏同步下载数 MB）
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-lazy="' + src + '"]');
+    if (existing) {
+      if (existing.dataset.loaded === '1') return resolve();
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error('加载失败: ' + src)));
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = src;
+    s.dataset.lazy = src;
+    s.onload = () => { s.dataset.loaded = '1'; resolve(); };
+    s.onerror = () => reject(new Error('加载失败: ' + src));
+    document.head.appendChild(s);
+  });
+}
 let mermaidReady = false;
-function ensureMermaid() {
-  if (mermaidReady || !window.mermaid) return;
-  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-  mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
-  mermaidReady = true;
+let mermaidLoading = null;
+async function ensureMermaid() {
+  if (window.mermaid) {
+    if (!mermaidReady) {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+      mermaidReady = true;
+    }
+    return true;
+  }
+  if (!mermaidLoading) {
+    mermaidLoading = loadScript('./vendor/mermaid.min.js').catch((e) => { console.warn(e); return false; });
+  }
+  const ok = await mermaidLoading;
+  if (ok && window.mermaid && !mermaidReady) {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+    mermaidReady = true;
+  }
+  return !!window.mermaid;
+}
+// 渲染流程图（仅在文档含 mermaid 代码块且库尚未加载时，才去懒加载 mermaid）
+async function renderMermaidDiagrams() {
+  if (!preview.querySelector('pre code.language-mermaid')) return;
+  const ok = await ensureMermaid();
+  if (!ok) return;
+  try {
+    const mermaidEls = preview.querySelectorAll('pre code.language-mermaid');
+    mermaidEls.forEach((el, idx) => {
+      const parent = el.parentElement;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'mermaid-wrapper';
+      wrapper.id = 'mermaid-' + Date.now() + '-' + idx;
+      wrapper.textContent = el.textContent;
+      parent.replaceWith(wrapper);
+    });
+    window.mermaid.run({ nodes: preview.querySelectorAll('.mermaid-wrapper') });
+  } catch (e) {
+    console.warn('Mermaid 渲染失败:', e);
+  }
 }
 function renderMarkdown() {
   const src = editor.value || '';
@@ -116,26 +169,8 @@ function renderMarkdown() {
       try { hljs.highlightElement(el); } catch (_) {}
     });
   }
-  // --- Mermaid 图表渲染（技术文档神器）---
-  if (window.mermaid) {
-    try {
-      const mermaidEls = preview.querySelectorAll('pre code.language-mermaid');
-      if (mermaidEls.length) {
-        ensureMermaid();
-        mermaidEls.forEach((el, idx) => {
-          const parent = el.parentElement;   // <pre>
-          const wrapper = document.createElement('div');
-          wrapper.className = 'mermaid-wrapper';
-          wrapper.id = 'mermaid-' + Date.now() + '-' + idx;
-          wrapper.textContent = el.textContent;   // 取回 mermaid 源码（自动还原转义）
-          parent.replaceWith(wrapper);
-        });
-        mermaid.run({ nodes: preview.querySelectorAll('.mermaid-wrapper') });
-      }
-    } catch (e) {
-      console.warn('Mermaid 渲染失败:', e);
-    }
-  }
+  // --- Mermaid 图表渲染（按需懒加载 mermaid 库，见 renderMermaidDiagrams）---
+  renderMermaidDiagrams();
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   headingLineMap = buildHeadingMap(editor.value);
   preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
@@ -670,7 +705,11 @@ async function exportHTML() {
 }
 async function exportPDF() {
   const pdfName = currentName.replace(/\.(md|markdown|txt)$/i, '') + '.pdf';
-  if (!window.html2pdf) { window.print(); return; }   // 无库降级系统打印
+  if (!window.html2pdf) {
+    flash('正在加载 PDF 模块…');
+    try { await loadScript('./vendor/html2pdf.bundle.min.js'); } catch (e) { console.warn(e); }
+    if (!window.html2pdf) { window.print(); return; }   // 加载失败降级系统打印
+  }
   flash('正在生成 PDF…');
   // 克隆预览内容到 off-screen 容器，强制亮色主题，不受当前视图 / 暗色主题影响
   const wrapper = document.createElement('div');

@@ -22,12 +22,11 @@
       } catch (e) {}
     })();
   </script>
-  <!-- 第三方库已本地化（vendor/），确保完全离线可用 -->
-  <script src="./vendor/marked.min.js"></script>
-  <script src="./vendor/highlight.min.js"></script>
-  <script src="./vendor/purify.min.js"></script>
-  <script src="./vendor/html2pdf.bundle.min.js"></script>
-  <script src="./vendor/mermaid.min.js"></script>
+  <!-- 第三方库已本地化（vendor/），确保完全离线可用；小库 defer 并行下载不阻塞解析 -->
+  <script defer src="./vendor/marked.min.js"></script>
+  <script defer src="./vendor/highlight.min.js"></script>
+  <script defer src="./vendor/purify.min.js"></script>
+  <!-- mermaid / html2pdf 体积大（合计 ~4MB）且非首屏必需，改为按需懒加载（见 app.js），不再这里同步加载 -->
 </head>
 <body>
   <div class="app">
@@ -120,7 +119,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.22</span>
+      <span class="version">v1.11.23</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -207,6 +206,6 @@
     </div>
   </div>
 
-  <script src="./app.js"></script>
+  <script defer src="./app.js"></script>
 </body>
 </html>

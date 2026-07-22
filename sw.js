@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v1.11.22';
+const CACHE_NAME = 'md-editor-v1.11.23';
 
 const SHELL = [
   './',
@@ -14,8 +14,8 @@ const SHELL = [
   './vendor/marked.min.js',
   './vendor/purify.min.js',
   './vendor/highlight.min.js',
-  './vendor/html2pdf.bundle.min.js',
-  './vendor/mermaid.min.js',
+  // 注：mermaid.min.js / html2pdf.bundle.min.js 体积大且非首屏必需，
+  // 改为运行时按需懒加载（见 app.js loadScript），不纳入预缓存，避免安装即下载 4MB+。
 ];
 
 /* ---------- 安装：预缓存完整应用外壳（任一失败即抛） ---------- */
@@ -63,24 +63,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静态资源：网络优先（保证 HTML / JS / CSS 版本一致，避免 SW 更新过渡期新旧错配导致脚本崩溃），离线再回退缓存
+  // 静态资源：缓存优先 + 后台更新（stale-while-revalidate）。
+  // 版本化缓存（CACHE_NAME 随版本号变更），重复打开秒开；后台静默拉取最新，保证发布后不长期陈旧。
   event.respondWith((async () => {
-    try {
-      const fresh = await fetch(req);
-      if (fresh && (fresh.ok || fresh.type === 'opaque')) {
-        const cache = await caches.open(CACHE_NAME);
-        cache.put(req, fresh.clone());
-      }
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(req);
+    const network = fetch(req).then((fresh) => {
+      if (fresh && (fresh.ok || fresh.type === 'opaque')) cache.put(req, fresh.clone());
       return fresh;
-    } catch {
-      const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(req);
-      if (cached) return cached;
-      if (url.pathname.endsWith('.png')) {
-        const fallback = await cache.match('./icons/icon-192.png');
-        if (fallback) return fallback;
-      }
-      return Response.error();
+    }).catch(() => null);
+    if (cached) {
+      // 命中缓存立即返回，后台更新（不阻塞）
+      network.catch(() => {});
+      return cached;
     }
+    const fresh = await network;
+    if (fresh) return fresh;
+    // 离线回退
+    if (url.pathname.endsWith('.png')) {
+      const fallback = await cache.match('./icons/icon-192.png');
+      if (fallback) return fallback;
+    }
+    return Response.error();
   })());
 });
