@@ -456,6 +456,24 @@ function download(name, content, type) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+async function exportMarkdown() {
+  // 导出原始 Markdown 源文件到本地（优先系统保存对话框，降级为浏览器下载）
+  const name = currentName.replace(/\.(html?|pdf)$/i, '') + '.md';
+  if ('showSaveFilePicker' in window) {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }] });
+      const w = await handle.createWritable();
+      await w.write(editor.value);
+      await w.close();
+      flash('已导出 Markdown');
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // 用户取消
+    }
+  }
+  download(name, editor.value, 'text/markdown;charset=utf-8');
+  flash('已导出 Markdown');
+}
 function exportHTML() {
   const doc = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'
     + escapeHtml(currentName) + '</title><style>' + EXPORT_CSS + '</style></head><body class="markdown-body">'
@@ -517,6 +535,7 @@ moreMenu.addEventListener('click', (e) => {
   else if (act === 'copytext') copyText();
   else if (act === 'copymd') copyMarkdown();
   else if (act === 'copy') copyHTML();
+  else if (act === 'md') exportMarkdown();
   else if (act === 'html') exportHTML();
   else if (act === 'pdf') exportPDF();
   else if (act === 'wrap') { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }
