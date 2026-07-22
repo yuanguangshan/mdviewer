@@ -1072,6 +1072,30 @@ function fmtTime(ts) {
   try { return new Date(ts).toLocaleDateString('zh-CN'); } catch (_) { return ''; }
 }
 
+// HTML 转义（正文可能含 < & " 等，防止注入并正确显示）
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// 从正文中截取包含关键词的上下文片段，并高亮命中词。返回安全的 HTML 串。
+// 仅在调用方已确认正文命中（indexOf >= 0）时使用。
+function buildSnippet(content, kw) {
+  const idx = content.toLowerCase().indexOf(kw);
+  if (idx < 0) return escapeHtml(content.slice(0, 60));
+  const start = Math.max(0, idx - 20);
+  const end = Math.min(content.length, idx + kw.length + 40);
+  const before = content.slice(start, idx).replace(/\s+/g, ' ');
+  const hit = content.slice(idx, idx + kw.length);
+  const after = content.slice(idx + kw.length, end).replace(/\s+/g, ' ');
+  return (start > 0 ? '…' : '')
+    + escapeHtml(before)
+    + '<mark class="lib-snippet-hit">' + escapeHtml(hit) + '</mark>'
+    + escapeHtml(after)
+    + (end < content.length ? '…' : '');
+}
+
 /* 抽屉开关 */
 const libDrawer = $('#libDrawer');
 const libScrim = $('#libScrim');
@@ -1123,7 +1147,12 @@ async function renderLibrary() {
   try { libDocsCache = await idbGetAll(); } catch (_) { libDocsCache = []; }
   libDocsCache.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const kw = (libSearch.value || '').trim().toLowerCase();
-  const shown = kw ? libDocsCache.filter((d) => (d.name || '').toLowerCase().includes(kw)) : libDocsCache;
+  // 全文检索：文件名 + 正文一起匹配（纯内存，毫秒级）
+  const shown = kw ? libDocsCache.filter((d) => {
+    const nameMatch = (d.name || '').toLowerCase().includes(kw);
+    const contentMatch = (d.content || '').toLowerCase().includes(kw);
+    return nameMatch || contentMatch;
+  }) : libDocsCache;
   libList.innerHTML = '';
   shown.forEach((d) => {
     const li = document.createElement('li');
@@ -1135,8 +1164,18 @@ async function renderLibrary() {
     const open = document.createElement('button');
     open.className = 'lib-item-open';
     open.innerHTML = '<span class="lib-item-name"></span><span class="lib-item-time"></span>';
-    open.querySelector('.lib-item-name').textContent = d.name || '未命名.md';
-    open.querySelector('.lib-item-time').textContent = fmtTime(d.updatedAt || Date.now());
+    const name = d.name || '未命名.md';
+    open.querySelector('.lib-item-name').textContent = name;
+    const timeEl = open.querySelector('.lib-item-time');
+    // 若仅正文命中（文件名未命中），副标题改为展示带高亮的正文摘要
+    const content = d.content || '';
+    if (kw && !name.toLowerCase().includes(kw) && content.toLowerCase().includes(kw)) {
+      timeEl.classList.add('is-snippet');
+      timeEl.innerHTML = buildSnippet(content, kw);
+    } else {
+      timeEl.classList.remove('is-snippet');
+      timeEl.textContent = fmtTime(d.updatedAt || Date.now());
+    }
     const acts = document.createElement('span');
     acts.className = 'lib-item-actions';
     acts.innerHTML = '<button class="lib-act" data-act="history" title="版本历史">⏱️</button>'

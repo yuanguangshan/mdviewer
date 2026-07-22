@@ -655,6 +655,14 @@ body.no-editor .editor-pane { display: none; }
   overflow: hidden; text-overflow: ellipsis;
 }
 .lib-item-time { font-size: 11px; color: var(--text-dim); }
+.lib-item-time.is-snippet {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-dim); opacity: .85;
+}
+.lib-snippet-hit {
+  background: rgba(99,102,241,.22); color: var(--accent-soft);
+  border-radius: 3px; padding: 0 1px; font-weight: 700;
+}
 .lib-item-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .lib-act {
   appearance: none; border: 0; background: transparent; color: var(--text-dim);
