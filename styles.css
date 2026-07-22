@@ -51,7 +51,8 @@ body {
   gap: 12px; position: relative; z-index: 10;
 }
 .brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
-.brand-logo { width: 26px; height: 26px; border-radius: 7px; flex: 0 0 auto; display: block; }
+.brand-logo { width: 26px; height: 26px; flex: 0 0 auto; display: block; }
+.brand-logo .brand-dot { fill: var(--text); }
 .brand span { color: var(--accent-soft); }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
