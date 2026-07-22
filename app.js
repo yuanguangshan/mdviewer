@@ -77,8 +77,7 @@ function applyMdTheme(mode) {
   mdThemeMode = mode;
   document.documentElement.setAttribute('data-md-theme', mode);
   localStorage.setItem('md-mdtheme', mode);
-  const mm = $('#moreMenu');
-  if (mm) mm.querySelectorAll('[data-act="mdtheme"]').forEach((b) => {
+  document.querySelectorAll('[data-act="mdtheme"]').forEach((b) => {
     b.textContent = (b.dataset.val === mode ? '✓ ' : '') + MD_THEME_LABEL[b.dataset.val];
   });
 }
@@ -943,28 +942,52 @@ document.addEventListener('paste', (e) => {
 });
 
 const moreMenu = $('#moreMenu');
+const menuWrap = $('.menu-wrap');
 const btnMore = $('#btnMore');
+// 收起所有二级菜单
+function closeAllSubmenus() {
+  document.querySelectorAll('.menu.sub').forEach((s) => { s.hidden = true; s.classList.remove('open'); });
+  document.querySelectorAll('[data-sub]').forEach((b) => { b.classList.remove('active'); b.setAttribute('aria-expanded', 'false'); });
+}
+// 展开 / 收起某个二级菜单（同组互斥，再点一次收起）
+function toggleSubmenu(name) {
+  const sub = document.getElementById('sub-' + name);
+  if (!sub) return;
+  const isOpen = sub.classList.contains('open');
+  closeAllSubmenus();
+  if (!isOpen) {
+    sub.hidden = false;
+    sub.classList.add('open');
+    const trig = document.querySelector('[data-sub="' + name + '"]');
+    if (trig) { trig.classList.add('active'); trig.setAttribute('aria-expanded', 'true'); }
+  }
+}
 function openMoreMenu(open) {
+  closeAllSubmenus();
   if (open) { moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); }
   else { moreMenu.setAttribute('hidden', ''); btnMore.setAttribute('aria-expanded', 'false'); }
 }
 btnMore.addEventListener('click', () => openMoreMenu(moreMenu.hasAttribute('hidden')));
 document.addEventListener('click', (e) => {
-  if (!moreMenu.hasAttribute('hidden') && !moreMenu.contains(e.target) && !btnMore.contains(e.target)) {
-    openMoreMenu(false);
-  }
+  if (menuWrap.contains(e.target) || btnMore.contains(e.target)) return;
+  if (!moreMenu.hasAttribute('hidden')) openMoreMenu(false);
+  else closeAllSubmenus();
 });
-moreMenu.addEventListener('click', (e) => {
+menuWrap.addEventListener('click', (e) => {
+  // 二级菜单触发器：只展开/收起，不关闭主菜单
+  const subTrigger = e.target.closest('[data-sub]');
+  if (subTrigger) { toggleSubmenu(subTrigger.dataset.sub); return; }
   const btn = e.target.closest('[data-act], [data-action]');
   if (!btn) return;
-  const act = btn.dataset.act;
-  openMoreMenu(false);
-  // 自定义文本宏命令（data-action）
   const macro = btn.dataset.action;
   if (macro) {
+    openMoreMenu(false);
     if (TEXT_ACTIONS[macro]) TEXT_ACTIONS[macro]();
     return;
   }
+  const act = btn.dataset.act;
+  if (!act) return;
+  openMoreMenu(false);
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
   else if (act === 'nas-upload') uploadToNas();

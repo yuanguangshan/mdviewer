@@ -59,15 +59,25 @@
             <button role="menuitem" data-act="pdf">🖨 打印为 PDF</button>
             <div class="menu-sep"></div>
             <button role="menuitem" data-act="wrap" id="menuWrap">↩️ 换行：开</button>
-            <button role="menuitem" data-act="theme" id="menuTheme">🌓 主题</button>
+            <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题 ▸</button>
+            <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
+            <div class="menu-sep"></div>
+            <div class="menu-foot" role="presentation">Designed by yuanguangshan.</div>
+          </div>
+
+          <!-- 二级菜单：主题 -->
+          <div class="menu sub" id="sub-theme" role="menu" aria-label="主题" hidden>
+            <button role="menuitem" data-act="theme" id="menuTheme">🌗 切换 深/浅/跟随系统</button>
             <div class="menu-sep"></div>
             <div class="menu-label" role="presentation">预览主题</div>
             <button role="menuitem" data-act="mdtheme" data-val="github">GitHub</button>
             <button role="menuitem" data-act="mdtheme" data-val="onedark">One Dark</button>
             <button role="menuitem" data-act="mdtheme" data-val="solarized">Solarized</button>
             <button role="menuitem" data-act="mdtheme" data-val="nord">Nord</button>
-            <div class="menu-sep"></div>
-            <div class="menu-label" role="presentation">文本宏命令 (Macro)</div>
+          </div>
+
+          <!-- 二级菜单：文本宏命令 -->
+          <div class="menu sub" id="sub-macro" role="menu" aria-label="文本宏命令" hidden>
             <button role="menuitem" data-action="searchReplace">🔍 查找与替换</button>
             <button role="menuitem" data-action="formatSpacing">📐 中英排版优化</button>
             <button role="menuitem" data-action="removeEmptyLines">🧹 清除空行</button>
@@ -75,8 +85,6 @@
             <button role="menuitem" data-action="sortLines">🔢 按行排序</button>
             <button role="menuitem" data-action="toUpperCase">🔠 转大写</button>
             <button role="menuitem" data-action="toLowerCase">🔡 转小写</button>
-            <div class="menu-sep"></div>
-            <div class="menu-foot" role="presentation">Designed by yuanguangshan.</div>
           </div>
         </div>
         <input type="file" id="fileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
@@ -100,7 +108,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.16</span>
+      <span class="version">v1.11.17</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
