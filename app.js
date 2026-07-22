@@ -789,7 +789,8 @@ function aiErrorHint(err, endpoint) {
     if (location.protocol === 'https:' && /^http:\/\//i.test(endpoint || '')) {
       tips.push('页面是 HTTPS，不能请求 HTTP 端点（混合内容被浏览器拦截），请改用 https://');
     }
-    tips.push('端点未允许跨域（CORS）：需服务端返回 Access-Control-Allow-Origin，或经同源/代理转发');
+    tips.push('端点未允许跨域（CORS）：需服务端只设置一次 Access-Control-Allow-Origin，并对 OPTIONS 预检返回相同 CORS 头');
+    tips.push('若控制台提示 Access-Control-Allow-Origin 出现 "*, *" 多个值 —— 是代理层与应用层重复加了该头，去掉一层即可');
     return '网络或跨域被拦截。' + tips.join('；');
   }
   return m;
