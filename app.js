@@ -144,6 +144,52 @@ async function renderMermaidDiagrams() {
     console.warn('Mermaid 渲染失败:', e);
   }
 }
+/* ---------- KaTeX 数学公式（按需懒加载，与 mermaid 同策略）---------- */
+let katexCssInjected = false;
+let katexLoading = null;
+function injectKatexCss() {
+  if (katexCssInjected) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = './vendor/katex.min.css';   // 字体经 fonts/ 相对路径解析
+  document.head.appendChild(link);
+  katexCssInjected = true;
+}
+async function ensureKatex() {
+  if (window.katex && window.renderMathInElement) return true;
+  if (!katexLoading) {
+    injectKatexCss();
+    katexLoading = loadScript('./vendor/katex.min.js')
+      .then(() => loadScript('./vendor/katex-auto-render.min.js'))
+      .then(() => true)
+      .catch((e) => { console.warn(e); return false; });
+  }
+  return katexLoading;
+}
+// 仅当文档确有公式定界符（$$…$$ / $…$ / \(…\) / \[…\]）时才懒加载 KaTeX
+async function renderMathFormulas() {
+  const text = preview.textContent || '';
+  const hasMath = /\$\$[\s\S]+?\$\$/.test(text)
+    || /(^|[^\\$])\$[^$\n]+\$/.test(text)
+    || /\\\(|\\\[/.test(text);
+  if (!hasMath) return;
+  const ok = await ensureKatex();
+  if (!ok || !window.renderMathInElement) return;
+  try {
+    window.renderMathInElement(preview, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false },
+        { left: '$', right: '$', display: false }
+      ],
+      throwOnError: false,
+      ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+    });
+  } catch (e) {
+    console.warn('KaTeX 渲染失败:', e);
+  }
+}
 function renderMarkdown() {
   const src = editor.value || '';
   let html;
@@ -171,6 +217,8 @@ function renderMarkdown() {
   }
   // --- Mermaid 图表渲染（按需懒加载 mermaid 库，见 renderMermaidDiagrams）---
   renderMermaidDiagrams();
+  // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
+  renderMathFormulas();
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   headingLineMap = buildHeadingMap(editor.value);
   preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
