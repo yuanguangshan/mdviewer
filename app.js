@@ -405,6 +405,24 @@ function flash(msg) {
   flashTimer = setTimeout(() => { el.className = curSaveClass; el.textContent = curSaveText; }, 1600);
 }
 
+// 浮动 toast：比底部状态条更醒目，适合上传/下载等关键结果反馈
+let toastTimer = null;
+function toast(msg, type, ms) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.className = 'toast' + (type ? ' toast-' + type : '');
+  el.textContent = msg;
+  el.hidden = false;
+  // 强制重排以触发过渡动画
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { el.hidden = true; }, 240);
+  }, ms || 3200);
+}
+
 /* ---------- 文件名 / 草稿载入 / 内容变更统一刷新 ---------- */
 function updateFileName() {
   const el = $('#fileName');
@@ -759,10 +777,14 @@ async function uploadToNas() {
     }
     let info = {};
     try { info = await resp.json(); } catch (_) {}
-    flash('已上传到 NAS：' + (info.saved_as || info.filename || name));
+    const savedName = info.saved_as || info.filename || name;
+    flash('已上传到 NAS：' + savedName);
+    toast('✅ 已上传到 NAS：' + savedName, 'ok');
   } catch (e) {
     console.error(e);
-    flash('上传失败：' + e.message + '（检查网络 / CORS）');
+    const msg = '上传失败：' + e.message + '（检查网络 / CORS）';
+    flash(msg);
+    toast('❌ ' + msg, 'err');
   }
 }
 
@@ -824,6 +846,9 @@ async function nasOpen(input) {
   updateFileName();
   afterChange();
   flash('已从 NAS 打开：' + filename);
+  // 注意：下载内容仅载入编辑器（并备份到 localStorage 草稿），
+  // 不会自动进文库、也不写磁盘。需手动「存到文库」或「导出文件」才能真正留存。
+  toast('📥 已从 NAS 载入编辑器：' + filename + '（未存入文库，请手动保存）', 'info', 4200);
 }
 
 // 菜单：从 NAS 下载某一篇文档并用编辑器打开
