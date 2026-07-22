@@ -17,6 +17,8 @@
         var sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         var dark = m === 'dark' || (m === 'auto' && sysDark);
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        // 预览主题（独立于 app 主题）：尽早设定，避免首屏闪烁
+        document.documentElement.setAttribute('data-md-theme', localStorage.getItem('md-mdtheme') || 'github');
       } catch (e) {}
     })();
   </script>
@@ -47,6 +49,12 @@
             <button role="menuitem" data-act="pdf">🖨 打印为 PDF</button>
             <div class="menu-sep"></div>
             <button role="menuitem" data-act="theme" id="menuTheme">🌓 主题</button>
+            <div class="menu-sep"></div>
+            <div class="menu-label" role="presentation">预览主题</div>
+            <button role="menuitem" data-act="mdtheme" data-val="github">GitHub</button>
+            <button role="menuitem" data-act="mdtheme" data-val="onedark">One Dark</button>
+            <button role="menuitem" data-act="mdtheme" data-val="solarized">Solarized</button>
+            <button role="menuitem" data-act="mdtheme" data-val="nord">Nord</button>
           </div>
         </div>
         <input type="file" id="fileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
@@ -57,6 +65,7 @@
       <section class="editor-pane">
         <div class="editor-wrap">
           <div class="gutter" id="gutter" aria-hidden="true"></div>
+          <pre id="editorHighlight" class="editor-highlight" aria-hidden="true"></pre>
           <textarea id="editor" wrap="off" placeholder="在此输入 Markdown，右侧实时预览…&#10;支持：拖拽 / 粘贴图片、Tab 缩进、Ctrl+S 保存" spellcheck="false" aria-label="Markdown 编辑区"></textarea>
         </div>
       </section>
@@ -69,7 +78,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.9.4</span>
+      <span class="version">v1.10.0</span>
     </footer>
   </div>
 

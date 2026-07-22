@@ -5,6 +5,7 @@ const editor = $('#editor');
 const preview = $('#preview');
 const previewPane = $('#previewPane');
 const gutter = $('#gutter');
+const editorHighlight = $('#editorHighlight');
 const fileInput = $('#fileInput');
 
 // 自愈守卫：关键按钮缺失 = SW 更新过渡期 HTML/JS 版本错配，刷新一次拉一致版本（限一次防死循环）
@@ -48,6 +49,21 @@ function applyTheme(mode) {
 mql.addEventListener('change', () => { if (themeMode === 'auto') applyTheme('auto'); });
 applyTheme(themeMode);
 
+/* ---------- 预览主题：github / onedark / solarized / nord（独立于 app 主题）---------- */
+const MD_THEME_CYCLE = ['github', 'onedark', 'solarized', 'nord'];
+const MD_THEME_LABEL = { github: 'GitHub', onedark: 'One Dark', solarized: 'Solarized', nord: 'Nord' };
+let mdThemeMode = localStorage.getItem('md-mdtheme') || 'github';
+if (!MD_THEME_CYCLE.includes(mdThemeMode)) mdThemeMode = 'github';
+function applyMdTheme(mode) {
+  mdThemeMode = mode;
+  document.documentElement.setAttribute('data-md-theme', mode);
+  localStorage.setItem('md-mdtheme', mode);
+  const mm = $('#moreMenu');
+  if (mm) mm.querySelectorAll('[data-act="mdtheme"]').forEach((b) => {
+    b.textContent = (b.dataset.val === mode ? '✓ ' : '') + MD_THEME_LABEL[b.dataset.val];
+  });
+}
+
 /* ---------- 渲染 + 代码高亮 ---------- */
 let renderTimer = null;
 function renderMarkdown() {
@@ -69,6 +85,27 @@ function renderMarkdown() {
 function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(renderMarkdown, 120);
+}
+
+/* ---------- 编辑器源码高亮：textarea 之上叠一层 <pre>，复用 hljs 自带 markdown 语法 ---------- */
+function renderEditorHighlight() {
+  // 移动端（软换行）或缺 markdown 语法时不启用：避免错位 / 降级为纯文本
+  if (window.innerWidth <= 760 || !window.hljs || !hljs.getLanguage || !hljs.getLanguage('markdown')) {
+    editor.parentElement.classList.remove('has-overlay');
+    editorHighlight.textContent = '';
+    return;
+  }
+  try {
+    editorHighlight.innerHTML = hljs.highlight(editor.value, { language: 'markdown' }).value;
+    editor.parentElement.classList.add('has-overlay');
+    syncHighlightScroll();
+  } catch (_) {
+    editor.parentElement.classList.remove('has-overlay');
+  }
+}
+function syncHighlightScroll() {
+  editorHighlight.scrollTop = editor.scrollTop;
+  editorHighlight.scrollLeft = editor.scrollLeft;
 }
 
 /* ---------- 统计 / 行号 / 光标位置 ---------- */
@@ -137,6 +174,7 @@ function syncScroll(src, dst) {
 }
 editor.addEventListener('scroll', () => {
   gutter.scrollTop = editor.scrollTop;
+  syncHighlightScroll();
   syncScroll(editor, previewPane);
 });
 previewPane.addEventListener('scroll', () => syncScroll(previewPane, editor));
@@ -186,6 +224,7 @@ function loadDraft() {
 }
 function afterChange() {
   renderMarkdown();
+  renderEditorHighlight();
   updateStats();
   updateGutter();
   updatePos();
@@ -402,6 +441,7 @@ moreMenu.addEventListener('click', (e) => {
   else if (act === 'html') exportHTML();
   else if (act === 'pdf') exportPDF();
   else if (act === 'theme') applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]);
+  else if (act === 'mdtheme') applyMdTheme(btn.dataset.val);
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
@@ -492,6 +532,7 @@ if ('serviceWorker' in navigator) {
 function applyResponsive() {
   const narrow = window.innerWidth <= 760;
   editor.wrap = narrow ? 'soft' : 'off';
+  renderEditorHighlight();   // 进入/离开移动端时重算覆盖层显隐
 }
 window.addEventListener('resize', debounce(applyResponsive, 200));
 applyResponsive();
@@ -500,6 +541,8 @@ applyResponsive();
 setSaveState('', '就绪');
 loadDraft();
 renderMarkdown();
+renderEditorHighlight();
+applyMdTheme(mdThemeMode);
 updateStats();
 updateGutter();
 updatePos();
