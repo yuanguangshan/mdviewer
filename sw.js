@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v1.10.6';
+const CACHE_NAME = 'md-editor-v1.11.6';
 
 const SHELL = [
   './',
@@ -15,6 +15,7 @@ const SHELL = [
   './vendor/purify.min.js',
   './vendor/highlight.min.js',
   './vendor/html2pdf.bundle.min.js',
+  './vendor/mermaid.min.js',
 ];
 
 /* ---------- 安装：预缓存完整应用外壳（任一失败即抛） ---------- */

@@ -200,6 +200,23 @@ body.no-editor .editor-pane { display: none; }
 .markdown-body .hljs-emphasis { font-style: italic; }
 .markdown-body .hljs-strong { font-weight: 700; }
 
+/* 空状态欢迎卡片 */
+.welcome-card {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 320px; text-align: center; padding: 24px; color: var(--text-dim);
+}
+.welcome-emoji { font-size: 56px; margin-bottom: 12px; opacity: .75; }
+.welcome-card h2 { margin: 0 0 8px; font-weight: 600; color: var(--text); border: 0; padding: 0; }
+.welcome-sub { margin: 0 0 4px; font-size: 14px; }
+.welcome-note { margin: 0; font-size: 13px; }
+.welcome-card kbd {
+  font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text);
+}
+/* Mermaid 图表容器 */
+.mermaid-wrapper { margin: 1em 0; text-align: center; }
+.mermaid-wrapper svg { max-width: 100%; height: auto; }
+
 [data-theme="light"] .markdown-body .hljs-comment,
 [data-theme="light"] .markdown-body .hljs-quote { color: #6a737d; }
 [data-theme="light"] .markdown-body .hljs-keyword,

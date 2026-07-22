@@ -66,13 +66,30 @@ function applyMdTheme(mode) {
 
 /* ---------- 渲染 + 代码高亮 ---------- */
 let renderTimer = null;
+let mermaidReady = false;
+function ensureMermaid() {
+  if (mermaidReady || !window.mermaid) return;
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+  mermaidReady = true;
+}
 function renderMarkdown() {
-  const src = editor.value || '*开始输入以预览…*';
+  const src = editor.value || '';
   let html;
-  try {
-    html = window.marked ? marked.parse(src, { breaks: true, gfm: true }) : '<pre>' + escapeHtml(src) + '</pre>';
-  } catch (e) {
-    html = '<p style="color:#e06c75">渲染错误：' + escapeHtml(e.message) + '</p>';
+  // --- 空状态：展示欢迎卡片，而非斜体占位符 ---
+  if (!src.trim()) {
+    html = '<div class="welcome-card">'
+      + '<div class="welcome-emoji">✍️</div>'
+      + '<h2>开始创作</h2>'
+      + '<p class="welcome-sub">支持 <kbd>Ctrl+S</kbd> 保存 · <kbd>Ctrl+O</kbd> 打开</p>'
+      + '<p class="welcome-note">拖拽/粘贴图片 · 语法高亮 · 多主题预览 · 📚 文库自动回写</p>'
+      + '</div>';
+  } else {
+    try {
+      html = window.marked ? marked.parse(src, { breaks: true, gfm: true }) : '<pre>' + escapeHtml(src) + '</pre>';
+    } catch (e) {
+      html = '<p style="color:#e06c75">渲染错误：' + escapeHtml(e.message) + '</p>';
+    }
   }
   preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html) : html;
   // 后处理高亮：对任何 marked 版本都稳，且不依赖已废弃的 setOptions({highlight})
@@ -80,6 +97,26 @@ function renderMarkdown() {
     preview.querySelectorAll('pre code').forEach((el) => {
       try { hljs.highlightElement(el); } catch (_) {}
     });
+  }
+  // --- Mermaid 图表渲染（技术文档神器）---
+  if (window.mermaid) {
+    try {
+      const mermaidEls = preview.querySelectorAll('pre code.language-mermaid');
+      if (mermaidEls.length) {
+        ensureMermaid();
+        mermaidEls.forEach((el, idx) => {
+          const parent = el.parentElement;   // <pre>
+          const wrapper = document.createElement('div');
+          wrapper.className = 'mermaid-wrapper';
+          wrapper.id = 'mermaid-' + Date.now() + '-' + idx;
+          wrapper.textContent = el.textContent;   // 取回 mermaid 源码（自动还原转义）
+          parent.replaceWith(wrapper);
+        });
+        mermaid.run({ nodes: preview.querySelectorAll('.mermaid-wrapper') });
+      }
+    } catch (e) {
+      console.warn('Mermaid 渲染失败:', e);
+    }
   }
 }
 function scheduleRender() {
@@ -176,6 +213,8 @@ $('#btnView').addEventListener('click', nextView);
 const btnFullscreen = $('#btnFullscreen');
 const btnExitFullscreen = $('#btnExitFullscreen');
 function setFullscreen(on) {
+  // 全屏时若文库抽屉开着，强制关闭，避免退出按钮（z-index:9999）盖在抽屉之上
+  if (on && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
   document.body.classList.toggle('fullscreen', on);
   if (btnExitFullscreen) btnExitFullscreen.hidden = !on;   // 用 hidden 属性显隐，默认隐藏（不依赖外部 CSS）
   // 兜底：直接控制 chrome 显隐，即使样式未及时更新也能全屏
@@ -748,7 +787,8 @@ async function renderLibrary() {
     open.querySelector('.lib-item-time').textContent = fmtTime(d.updatedAt || Date.now());
     const acts = document.createElement('span');
     acts.className = 'lib-item-actions';
-    acts.innerHTML = '<button class="lib-act" data-act="download" title="下载为 .md">⬇️</button>'
+    acts.innerHTML = '<button class="lib-act" data-act="history" title="版本历史">⏱️</button>'
+      + '<button class="lib-act" data-act="download" title="下载为 .md">⬇️</button>'
       + '<button class="lib-act" data-act="rename" title="重命名">✏️</button>'
       + '<button class="lib-act" data-act="delete" title="删除">🗑</button>';
     li.appendChild(avatar);
@@ -790,7 +830,8 @@ libList.addEventListener('click', (e) => {
   const actBtn = e.target.closest('.lib-act');
   if (actBtn) {
     const act = actBtn.dataset.act;
-    if (act === 'download') downloadLibDoc(id);
+    if (act === 'history') showHistoryModal(id);
+    else if (act === 'download') downloadLibDoc(id);
     else if (act === 'rename') renameLibDoc(id);
     else if (act === 'delete') deleteLibDoc(id);
     return;
@@ -891,16 +932,60 @@ if (libFileInput) {
   });
 }
 
-/* 自动回写：打开文库文档后，每次编辑去抖写入 IndexedDB */
+/* 自动回写：打开文库文档后，每次编辑去抖写入 IndexedDB，并保留版本历史 */
+const MAX_HISTORY = 20;
 const writebackLibDebounced = debounce(() => { writebackLib(); }, 800);
 function writebackLib() {
   if (!currentLibId || !libDb) return;
-  const doc = { id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now() };
-  idbPut(doc).then(() => {
+  const newContent = editor.value;
+  idbGet(currentLibId).then((oldDoc) => {
+    const history = (oldDoc && oldDoc.history) || [];
+    // 内容未变：仅更新时间戳，不记快照（避免空转刷屏历史）
+    if (oldDoc && oldDoc.content === newContent) {
+      return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history });
+    }
+    history.push({
+      at: Date.now(),
+      summary: newContent.slice(0, 200) + (newContent.length > 200 ? '…' : ''),
+      content: newContent,
+    });
+    if (history.length > MAX_HISTORY) history.shift();   // 只留最近 20 条
+    return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history });
+  }).then(() => {
     setSaveState('saved', '✓ 已存文库');
     const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
-    if (t) t.textContent = fmtTime(doc.updatedAt);
+    if (t) t.textContent = fmtTime(Date.now());
   }).catch(() => setSaveState('saved', '回写失败'));
+}
+
+/* 版本历史弹窗：列出快照，选择后恢复（截断其后历史，符合 Git 恢复逻辑） */
+async function showHistoryModal(docId) {
+  const doc = await idbGet(docId).catch(() => null);
+  if (!doc || !doc.history || !doc.history.length) {
+    flash('该文档暂无历史版本');
+    return;
+  }
+  const list = doc.history.map((h, i) =>
+    `${i + 1}. ${new Date(h.at).toLocaleString('zh-CN')} - ${h.summary}`
+  ).join('\n');
+  const choice = prompt(`选择要恢复的版本（输入编号 1-${doc.history.length}）：\n\n${list}`);
+  const idx = parseInt(choice, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= doc.history.length) return;
+  const target = doc.history[idx];
+  if (!confirm(`恢复至 ${new Date(target.at).toLocaleString('zh-CN')} 的版本？当前内容将被覆盖。`)) return;
+
+  editor.value = target.content;
+  currentName = doc.name;
+  currentLibId = docId;
+  currentFileHandle = null;
+  updateFileName();
+  doc.history = doc.history.slice(0, idx + 1);   // 截断：被恢复版本之后的历史丢弃
+  doc.content = target.content;
+  doc.updatedAt = Date.now();
+  await idbPut(doc);
+  afterChange({ skipWriteback: true });
+  renderLibrary();
+  flash('已恢复至历史版本');
 }
 
 /* ---------- 初始化 ---------- */
