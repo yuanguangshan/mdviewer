@@ -1036,9 +1036,45 @@ function saveAiSettings() {
   if (m) m.hidden = true;
   toast('AI 配置已保存（仅本机）', 'ok');
 }
+// 测试 AI 连接：用极小请求验证端点可达 + Key 有效（不插入正文，仅提示结果）
+async function testAiConnection() {
+  // 优先用表单里当前填写的值（可能还没点保存）
+  const epEl = $('#aiEndpoint'), mdEl = $('#aiModel'), keyEl = $('#aiKey');
+  const cfg = readAiConfig();
+  const endpoint = (epEl && epEl.value.trim()) || cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
+  const model = (mdEl && mdEl.value.trim()) || cfg.model || 'gpt-4o-mini';
+  const apiKey = (keyEl && keyEl.value.trim()) || cfg.apiKey || '';
+  if (!apiKey) { toast('请先填写 API Key', 'err'); return; }
+  toast('正在测试连接…', 'info', 30000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      signal: ctrl.signal,
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 5, stream: false })
+    });
+    clearTimeout(timer);
+    if (!resp.ok) {
+      let msg = 'HTTP ' + resp.status;
+      try { const t = await resp.text(); const j = JSON.parse(t); if (j && j.error) msg += '：' + (j.error.message || j.error); } catch (_) {}
+      toast('连接失败：' + msg, 'err', 6000);
+      return;
+    }
+    let okMsg = '连接成功 ✓';
+    try { const j = await resp.json(); if (j && j.model) okMsg += '（' + j.model + '）'; } catch (_) {}
+    toast(okMsg, 'ok', 4000);
+  } catch (e) {
+    clearTimeout(timer);
+    if (e && e.name === 'AbortError') toast('连接超时（>20s），请检查网络或端点', 'err', 6000);
+    else toast('连接失败：' + aiErrorHint(e, endpoint), 'err', 6000);
+  }
+}
 const aiModal = $('#aiSettingsModal');
 if (aiModal) {
   $('#aiSettingsSave').addEventListener('click', saveAiSettings);
+  $('#aiTest').addEventListener('click', testAiConnection);
   $('#aiSettingsCancel').addEventListener('click', () => { aiModal.hidden = true; });
   // 点击遮罩空白处关闭
   aiModal.addEventListener('click', (e) => { if (e.target === aiModal) aiModal.hidden = true; });
@@ -1614,7 +1650,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
 });
 
-/* 文库内嵌音乐播放器：折叠开关 */
+/* 文库内嵌音乐播放器：折叠开关（iframe 首次展开时才加载，避免一开页面就触发外链自动搜索） */
 const libMusic = $('#libMusic');
 const libMusicToggle = $('#libMusicToggle');
 if (libMusicToggle) libMusicToggle.addEventListener('click', () => {
@@ -1622,6 +1658,10 @@ if (libMusicToggle) libMusicToggle.addEventListener('click', () => {
   libMusic.hidden = !open;
   libMusicToggle.setAttribute('aria-expanded', String(open));
   libMusicToggle.classList.toggle('active', open);
+  if (open) {
+    const f = libMusic.querySelector('.lib-music-frame');
+    if (f && !f.getAttribute('src') && f.dataset.src) f.src = f.dataset.src;
+  }
 });
 
 /* 渲染列表 */
