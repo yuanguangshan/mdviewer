@@ -348,6 +348,29 @@ async function copyHTML() {
     flash('复制失败');
   }
 }
+/* 复制渲染后的纯文本：克隆到可见处取 innerText，保证纯编辑视图（预览隐藏）下也有正确换行 */
+async function copyText() {
+  try {
+    const clone = preview.cloneNode(true);
+    clone.style.cssText = 'position:absolute;left:-9999px;top:0';
+    document.body.appendChild(clone);
+    const txt = clone.innerText;
+    clone.remove();
+    await navigator.clipboard.writeText(txt);
+    flash('已复制文本');
+  } catch {
+    flash('复制失败');
+  }
+}
+/* 复制 Markdown 源码 */
+async function copyMarkdown() {
+  try {
+    await navigator.clipboard.writeText(editor.value);
+    flash('已复制 Markdown');
+  } catch {
+    flash('复制失败');
+  }
+}
 
 /* ---------- 导出 HTML / 打印 PDF ---------- */
 const EXPORT_CSS = [
@@ -437,6 +460,8 @@ moreMenu.addEventListener('click', (e) => {
   const act = btn.dataset.act;
   openMoreMenu(false);
   if (act === 'rename') renameFile();
+  else if (act === 'copytext') copyText();
+  else if (act === 'copymd') copyMarkdown();
   else if (act === 'copy') copyHTML();
   else if (act === 'html') exportHTML();
   else if (act === 'pdf') exportPDF();
