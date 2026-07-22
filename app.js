@@ -691,6 +691,7 @@ async function exportPDF() {
 const NAS_UPLOAD_URL = 'https://upload.want.biz/api/upload';
 const NAS_DOWNLOAD_URL = 'https://upload.want.biz/api/uploads/download';
 const NAS_ARCHIVE_DOMAIN = 'knowly.want.biz';
+const NAS_ARCHIVE_HOST = 'https://knowly.want.biz';
 const NAS_MAX_BYTES = 200 * 1024 * 1024;
 
 function nasBasicAuth() {
@@ -714,6 +715,17 @@ function extractNasFilename(input) {
     if (/\.(md|markdown|txt)$/i.test(base)) return base;
   }
   return '';
+}
+
+// 归档链接 → knowly 归档下载接口。
+// 关键：path 为【相对】/data/archive/ 的路径（如 2026/07/22/<file>.md），
+// 不是绝对路径 /data/archive/...（绝对路径会触发服务端 "failed to get file size: Process exited with status 1" 的 503）。
+function nasArchiveUrl(input) {
+  const s = String(input || '').trim();
+  const m = s.match(/knowly\.want\.biz\/#?\/archive\/(\d{4})\/(\d{2})\/(\d{2})\/([^/?#\s]+\.(?:md|markdown|txt))/i);
+  if (!m) return null;
+  const rel = m[1] + '/' + m[2] + '/' + m[3] + '/' + decodeURIComponent(m[4]);
+  return NAS_ARCHIVE_HOST + '/api/archive/download?path=' + encodeURIComponent(rel);
 }
 
 // 上传当前 Markdown 文档到 NAS（multipart/form-data，字段 file，携带 Basic 鉴权）
@@ -754,10 +766,26 @@ async function uploadToNas() {
   }
 }
 
-// 按文件名（或归档链接）从 NAS 取回文本；与上传共用 Basic 鉴权（服务端要求鉴权，不携带会被 401 拒绝）
+// 按文件名（或归档链接）从 NAS 取回文本。
+// - 归档链接（knowly.want.biz/#/archive/...）→ 走 knowly 归档接口（相对路径）
+// - 其它（纯文件名 / 未归档的 uploads 文件名）→ 走 upload.want.biz/api/uploads/download
+// 两者共用 localStorage 里的 Basic 鉴权（服务端要求鉴权，不携带会被 401 拒绝）
 async function downloadFromNas(input) {
-  const filename = extractNasFilename(input);
-  if (!filename) { flash('无法解析 NAS 文件名'); return null; }
+  const s = String(input || '').trim();
+  if (!s) { flash('无法解析 NAS 文件名'); return null; }
+
+  let url, label;
+  const arcUrl = nasArchiveUrl(s);
+  if (arcUrl) {
+    url = arcUrl;
+    label = '归档文件';
+  } else {
+    const filename = extractNasFilename(s);
+    if (!filename) { flash('无法解析 NAS 文件名'); return null; }
+    url = NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(filename);
+    label = filename;
+  }
+
   // 凭据缺失时本机输入一次，仅存 localStorage（不进仓库）
   let auth = localStorage.getItem('nas-auth') || '';
   if (!auth) {
@@ -767,8 +795,8 @@ async function downloadFromNas(input) {
   }
   let authHeader = '';
   try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return null; }
-  const url = NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(filename);
-  flash('正在从 NAS 下载：' + filename + '…');
+
+  flash('正在从 NAS 下载：' + label + '…');
   try {
     const resp = await fetch(url, { headers: { 'Authorization': authHeader } });
     if (!resp.ok) {
