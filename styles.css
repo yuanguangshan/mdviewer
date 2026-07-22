@@ -113,8 +113,8 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .menu:not([hidden]) { animation: menuIn .09s ease-out; }
 @keyframes menuIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
-/* 二级菜单：作为 .menu-wrap 的兄弟节点，向左展开并贴合主菜单顶部 */
-.menu.sub { top: 0; right: calc(100% + 8px); min-width: 200px; }
+/* 二级菜单：作为 .menu-wrap 的兄弟节点，向左展开并与主菜单顶部对齐 */
+.menu.sub { top: calc(100% + 6px); right: calc(100% + 8px); min-width: 200px; }
 .menu button.active { background: var(--bg-soft); color: var(--accent-soft); }
 .menu [data-sub]::after { content: ''; }
 
