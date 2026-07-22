@@ -63,6 +63,8 @@
             <button role="menuitem" data-act="mdtheme" data-val="onedark">One Dark</button>
             <button role="menuitem" data-act="mdtheme" data-val="solarized">Solarized</button>
             <button role="menuitem" data-act="mdtheme" data-val="nord">Nord</button>
+            <div class="menu-sep"></div>
+            <div class="menu-foot" role="presentation">Designed by yuanguangshan.</div>
           </div>
         </div>
         <input type="file" id="fileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
@@ -86,7 +88,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.2</span>
+      <span class="version">v1.11.3</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -96,7 +98,10 @@
   <div class="lib-scrim" id="libScrim" hidden></div>
   <aside class="lib-drawer" id="libDrawer" aria-hidden="true" aria-label="文库">
     <div class="lib-head">
-      <div class="lib-title">📚 文库</div>
+      <div class="lib-head-left">
+        <div class="lib-title">📚 文库</div>
+        <span class="lib-subtitle">苑广山的在线文库</span>
+      </div>
       <button class="lib-close" id="libClose" title="关闭" aria-label="关闭文库">✕</button>
     </div>
     <div class="lib-tools">

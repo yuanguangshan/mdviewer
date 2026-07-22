@@ -316,6 +316,7 @@ body.no-editor .editor-pane { display: none; }
 
 /* 更多菜单：分组小标题 */
 .menu-label { padding: 7px 12px 3px; font-size: 11px; color: var(--text-dim); user-select: none; }
+.menu-foot { padding: 8px 12px 6px; font-size: 11px; line-height: 1.4; color: var(--text-dim); text-align: center; user-select: none; opacity: .8; }
 
 /* 移动端关闭覆盖层（软换行无法与 textarea 逐行对齐）*/
 @media (max-width: 760px) {
@@ -518,6 +519,8 @@ body.no-editor .editor-pane { display: none; }
   flex: 0 0 auto;
 }
 .lib-title { font-weight: 700; font-size: 15px; }
+.lib-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lib-subtitle { font-size: 12px; font-weight: 500; color: var(--text-dim); white-space: nowrap; }
 .lib-close {
   appearance: none; border: 0; background: transparent; color: var(--text-dim);
   font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px; border-radius: 7px;

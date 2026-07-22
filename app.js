@@ -262,14 +262,14 @@ function loadDraft() {
   if (name) currentName = name;
   updateFileName();
 }
-function afterChange() {
+function afterChange(opts) {
   renderMarkdown();
   renderEditorHighlight();
   updateStats();
   updateGutter();
   updatePos();
   saveDraft();
-  writebackLibDebounced();   // 文库文档：编辑后去抖自动回写（非文库文档时内部直接跳过）
+  if (!(opts && opts.skipWriteback)) writebackLibDebounced();   // 文库文档：编辑后去抖自动回写（打开/恢复时跳过，避免刷新时间戳）
 }
 editor.addEventListener('input', afterChange);
 ['keyup', 'click', 'select'].forEach((ev) => editor.addEventListener(ev, updatePos));
@@ -756,7 +756,7 @@ function openLibDocData(doc) {
   editor.value = doc.content || '';
   localStorage.setItem('md-lib-current', doc.id);
   updateFileName();
-  afterChange();
+  afterChange({ skipWriteback: true });   // 打开即载入，不应刷新更新时间
   setSaveState('saved', '✓ 文库');
   renderLibrary();
 }
