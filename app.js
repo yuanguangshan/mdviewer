@@ -861,7 +861,8 @@ async function callAiApi(promptText, systemPrompt) {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: promptText }
         ],
-        temperature: 0.7
+        temperature: 0.7,
+        stream: false
       })
     });
     if (!resp.ok) {
