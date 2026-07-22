@@ -834,55 +834,29 @@ function aiErrorHint(err, endpoint) {
   }
   return m;
 }
-// 兼容流式(SSE)与非流式(JSON)两种响应：流式按 data: 行抽 delta.content，
-// 非流式读 choices[0].message.content。服务端可能忽略 stream:false 仍返回流。
-function extractAiContent(text) {
-  const trimmed = (text || '').trim();
-  if (trimmed.startsWith('data:')) {
-    let out = '';
-    for (const rawLine of trimmed.split('\n')) {
-      const line = rawLine.trim();
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-      try {
-        const j = JSON.parse(payload);
-        const ch = j.choices && j.choices[0];
-        if (ch && ch.delta && ch.delta.content) out += ch.delta.content;
-        else if (ch && ch.message && ch.message.content) out += ch.message.content;
-      } catch (_) { /* 忽略 keepalive / 非 JSON 行 */ }
-    }
-    return out.trim();
-  }
-  // 非流式 JSON
-  try {
-    const data = JSON.parse(trimmed);
-    return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
-  } catch (e) {
-    throw new Error('返回既非 SSE 流也非合法 JSON：' + trimmed.slice(0, 80));
-  }
-}
-async function callAiApi(promptText, systemPrompt) {
+// 流式调用 AI：读取 ReadableStream 增量解析 SSE（data: 行抽 delta.content），
+// 每收到一段回调 onToken(deltaText, fullText)；非流式 JSON 兜底；支持 AbortSignal 中途停止。
+// opts: { signal, quiet } —— quiet=true 时不弹"正在思考" toast（由浮层展示进度）。
+async function streamAiApi(promptText, systemPrompt, onToken, opts) {
+  opts = opts || {};
   let cfg = readAiConfig();
   let apiKey = cfg.apiKey;
   const endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
   const model = cfg.model || 'gpt-4o-mini';
-
-  // 未配置 Key：本机输入一次（不预置进代码/仓库）
   if (!apiKey) {
     apiKey = window.prompt('请输入 AI API Key（OpenAI / DeepSeek / 中转商，仅存本机）：', '');
     if (!apiKey) { toast('未配置 AI Key', 'err'); return null; }
-    // 首次输入后询问是否保存，避免泄露到仓库
     if (window.confirm('是否将此配置保留在本机 localStorage 以便下次使用？')) {
       try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ apiKey, endpoint, model })); } catch (_) {}
     }
   }
-
-  toast('AI 正在思考…', 'info', 60000);
+  if (!opts.quiet) toast('AI 正在思考…', 'info', 60000);
+  let full = '';
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      signal: opts.signal || undefined,
       body: JSON.stringify({
         model,
         messages: [
@@ -890,51 +864,130 @@ async function callAiApi(promptText, systemPrompt) {
           { role: 'user', content: promptText }
         ],
         temperature: 0.7,
-        stream: false
+        stream: true
       })
     });
     if (!resp.ok) {
       let msg = 'HTTP ' + resp.status;
-      try { const j = await resp.json(); if (j && j.error) msg += '：' + (j.error.message || j.error); } catch (_) {}
+      try { const t = await resp.text(); const j = JSON.parse(t); if (j && j.error) msg += '：' + (j.error.message || j.error); } catch (_) {}
       throw new Error(msg);
     }
-    const text = await resp.text();
-    return extractAiContent(text);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', sseMode = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      if (sseMode === null) {
+        const head = buffer.trimStart();
+        if (head.startsWith('data:')) sseMode = true;
+        else if (head.startsWith('{')) sseMode = false;
+      }
+      if (sseMode === true) {
+        let idx;
+        while ((idx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            const ch = j.choices && j.choices[0];
+            const delta = (ch && ((ch.delta && ch.delta.content) || (ch.message && ch.message.content))) || '';
+            if (delta) { full += delta; if (onToken) onToken(delta, full); }
+          } catch (_) { /* keepalive / 非 JSON */ }
+        }
+      }
+    }
+    if (sseMode === false) {
+      const data = JSON.parse(buffer.trim());
+      full = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+      if (onToken) onToken(full, full);
+    }
+    return full.trim();
   } catch (e) {
+    if (e && e.name === 'AbortError') return full; // 主动停止：保留已生成内容
     console.error(e);
     toast('AI 调用失败：' + aiErrorHint(e, endpoint), 'err', 6000);
     return null;
   }
 }
-// 对选中文本执行 AI 变换后替换选区
-async function aiProcessSelection(systemPrompt, label) {
+// 非流式便捷封装（一次性返回全文）
+async function callAiApi(promptText, systemPrompt) {
+  return streamAiApi(promptText, systemPrompt, null, { quiet: false });
+}
+
+/* ---------- AI 流式打字机浮层 ---------- */
+let aiStreamAbort = null;   // 当前流式请求的 AbortController
+let aiStreamApply = null;   // 完成后的"应用"回调
+let aiStreamFull = '';      // 已生成全文
+
+// 打开浮层并发起流式请求；文本实时追加到面板，点"应用"时调用 onApply(full)
+function aiRunStream({ label, systemPrompt, promptText, onApply }) {
+  const panel = document.getElementById('aiStreamPanel');
+  const body = document.getElementById('aspBody');
+  const caret = document.getElementById('aspCaret');
+  const title = document.getElementById('aspTitle');
+  const applyBtn = document.getElementById('aspApply');
+  if (!panel || !body || !caret) { // 无浮层兜底：直接非流式替换
+    streamAiApi(promptText, systemPrompt, null).then((r) => { if (r && onApply) onApply(r); });
+    return;
+  }
+  title.textContent = label;
+  body.innerHTML = '';
+  body.appendChild(caret);
+  panel.hidden = false;
+  applyBtn.disabled = false;
+  aiStreamAbort = new AbortController();
+  aiStreamFull = '';
+  aiStreamApply = onApply;
+  const ctrl = aiStreamAbort;
+  streamAiApi(promptText, systemPrompt, (delta, acc) => {
+    aiStreamFull = acc;
+    body.insertBefore(document.createTextNode(delta), caret);
+    body.scrollTop = body.scrollHeight;
+  }, { signal: ctrl.signal, quiet: true }).then((r) => {
+    if (r) aiStreamFull = r;
+    else { panel.hidden = true; aiStreamApply = null; } // 出错
+  });
+}
+
+// 对选中文本执行 AI 变换：流式打字机展示，结束后点"应用"替换选区
+function aiProcessSelection(systemPrompt, label) {
   const s = editor.selectionStart, e = editor.selectionEnd;
   const selected = editor.value.slice(s, e);
   if (!selected) { toast('请先在编辑器中选中一段文本', 'err'); return; }
-  const r = await callAiApi(selected, systemPrompt);
-  if (r) {
-    editor.value = editor.value.slice(0, s) + r + editor.value.slice(e);
-    editor.selectionStart = s;
-    editor.selectionEnd = s + r.length;
-    afterChange();
-    toast('已' + label + '选中文字', 'ok');
-  }
+  aiRunStream({
+    label: 'AI ' + label,
+    systemPrompt, promptText: selected,
+    onApply: (full) => {
+      editor.value = editor.value.slice(0, s) + full + editor.value.slice(e);
+      editor.selectionStart = s;
+      editor.selectionEnd = s + full.length;
+      afterChange();
+      toast('已' + label + '选中文字', 'ok');
+    }
+  });
 }
 const AI_ACTIONS = {
-  // 全文总结：在文首插入摘要 blockquote
+  // 全文总结：流式打字机展示，结束后插入文首
   aiSummary() {
     const content = editor.value;
     if (!content.trim()) { toast('文章为空', 'err'); return; }
-    (async () => {
-      const r = await callAiApi(content, '你是一名专业的写作助手。请为以下 Markdown 文章写一段精炼的中文摘要（300 字以内），只输出摘要正文，不要标题、序号或前缀：');
-      if (r) {
-        const block = '> **💡 AI 摘要**\n> ' + r.replace(/\n+/g, '\n> ') + '\n\n---\n\n';
+    aiRunStream({
+      label: 'AI 摘要',
+      systemPrompt: '你是一名专业的写作助手。请为以下 Markdown 文章写一段精炼的中文摘要（300 字以内），只输出摘要正文，不要标题、序号或前缀：',
+      promptText: content,
+      onApply: (full) => {
+        const block = '> **💡 AI 摘要**\n> ' + full.replace(/\n+/g, '\n> ') + '\n\n---\n\n';
         editor.value = block + editor.value;
         editor.selectionStart = editor.selectionEnd = 0;
         afterChange();
         toast('AI 摘要已插入文首', 'ok');
       }
-    })();
+    });
   },
   // 润色选中文字
   aiPolish() {
@@ -948,14 +1001,16 @@ const AI_ACTIONS = {
   aiTranslate() {
     aiProcessSelection('将以下文本准确翻译为地道英文，保留 Markdown 格式，只输出译文：', '翻译');
   },
-  // 按提示词生成文章，插入光标处
+  // 按提示词生成文章，流式打字机展示，结束后插入光标处
   aiGenerate() {
     const topic = window.prompt('请输入主题或提示词：', '');
     if (!topic) { toast('已取消', 'info'); return; }
-    (async () => {
-      const r = await callAiApi(topic, '你是一名专业的写作助手和 Markdown 排版专家。请根据用户给出的主题，撰写一篇结构清晰、Markdown 格式的中文文章（含标题、小节、要点），只输出正文：');
-      if (r) { insertAtCursor(r + '\n\n'); toast('AI 已生成并插入', 'ok'); }
-    })();
+    aiRunStream({
+      label: 'AI 生成',
+      systemPrompt: '你是一名专业的写作助手和 Markdown 排版专家。请根据用户给出的主题，撰写一篇结构清晰、Markdown 格式的中文文章（含标题、小节、要点），只输出正文：',
+      promptText: topic,
+      onApply: (full) => { insertAtCursor(full + '\n\n'); toast('AI 已生成并插入', 'ok'); }
+    });
   },
   // 打开 AI 设置
   aiSettings() { openAiSettings(); }
@@ -991,6 +1046,28 @@ if (aiModal) {
   aiModal.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); saveAiSettings(); }
     else if (e.key === 'Escape') aiModal.hidden = true;
+  });
+}
+
+/* AI 流式打字机浮层按钮：应用 / 取消 / 停止 */
+const aiStreamPanelEl = document.getElementById('aiStreamPanel');
+if (aiStreamPanelEl) {
+  document.getElementById('aspApply').addEventListener('click', () => {
+    if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
+    if (aiStreamApply) {
+      const fn = aiStreamApply; aiStreamApply = null;
+      fn(aiStreamFull);
+    }
+    aiStreamPanelEl.hidden = true;
+  });
+  document.getElementById('aspCancel').addEventListener('click', () => {
+    if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
+    aiStreamApply = null;
+    aiStreamPanelEl.hidden = true;
+  });
+  document.getElementById('aspStop').addEventListener('click', () => {
+    if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
+    // 停止后保留已生成内容，应用按钮仍可用
   });
 }
 
