@@ -614,7 +614,7 @@ function download(name, content, type) {
 }
 async function exportMarkdown() {
   // 导出原始 Markdown 源文件到本地（优先系统保存对话框，降级为浏览器下载）
-  const name = currentName.replace(/\.(html?|pdf)$/i, '') + '.md';
+  const name = currentName.replace(/\.(md|markdown|txt|html?|pdf)$/i, '') + '.md';
   if ('showSaveFilePicker' in window) {
     try {
       const handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }] });
@@ -1069,7 +1069,7 @@ async function downloadLibDoc(id) {
   try {
     const doc = await idbGet(id);
     if (!doc) return;
-    const name = (doc.name || '未命名.md').replace(/\.(html?|pdf)$/i, '') + '.md';
+    const name = (doc.name || '未命名.md').replace(/\.(md|markdown|txt|html?|pdf)$/i, '') + '.md';
     download(name, doc.content || '', 'text/markdown;charset=utf-8');
     flash('已下载 ' + name);
   } catch (_) { flash('下载失败'); }
