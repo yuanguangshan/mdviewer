@@ -120,7 +120,7 @@
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v1.11.30</span>
+      <span class="version">v1.11.31</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -171,7 +171,7 @@
     </div>
     <footer class="lib-foot">
       <span class="lib-foot-count">共 <span id="libFootCount">0</span> 篇</span>
-      <span class="lib-foot-note">🔒 本地保存 · 不上传</span>
+      <span class="lib-foot-note" title="文档优先保存在本机；配置 NAS 后会自动增量同步">🔒 本地优先 · NAS 同步可选</span>
     </footer>
   </aside>
   <input type="file" id="libFileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden />
