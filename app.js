@@ -684,6 +684,122 @@ async function exportPDF() {
   }
 }
 
+/* ---------- NAS 同步：上传 / 下载 ----------
+   凭据不写死在代码里（避免随仓库泄露）。
+   首次上传时在本机弹窗输入一次，仅存入浏览器 localStorage（不上传、不入 git）。
+   也可在控制台预置：localStorage.setItem('nas-auth','user:password') */
+const NAS_UPLOAD_URL = 'https://upload.want.biz/api/upload';
+const NAS_DOWNLOAD_URL = 'https://upload.want.biz/api/uploads/download';
+const NAS_ARCHIVE_DOMAIN = 'knowly.want.biz';
+const NAS_MAX_BYTES = 200 * 1024 * 1024;
+
+function nasBasicAuth() {
+  const auth = localStorage.getItem('nas-auth') || '';
+  try { return auth ? 'Basic ' + btoa(auth) : ''; } catch (_) { return ''; }
+}
+
+// 从 knowly.want.biz 归档链接，或纯文件名中解析出 uploads 目录里的文件名（仅 basename）
+function extractNasFilename(input) {
+  if (!input) return '';
+  const s = String(input).trim();
+  // 完整归档链接：https://knowly.want.biz/#/archive/2026/07/22/180032_xxx.md
+  let m = s.match(/knowly\.want\.biz\/#?\/archive\/[^?\s]*\/([^/?#\s]+)/i);
+  if (m) return decodeURIComponent(m[1]);
+  // 其它 knowly.want.biz 路径里的 .md/.markdown/.txt
+  m = s.match(/knowly\.want\.biz\/[^?\s]*\/([^/?#\s]+\.(?:md|markdown|txt))/i);
+  if (m) return decodeURIComponent(m[1]);
+  // 纯文件名（不含协议、不含路径分隔符）
+  if (!/^https?:\/\//i.test(s)) {
+    const base = s.split(/[\\/]/).pop();
+    if (/\.(md|markdown|txt)$/i.test(base)) return base;
+  }
+  return '';
+}
+
+// 上传当前 Markdown 文档到 NAS（multipart/form-data，字段 file，携带 Basic 鉴权）
+async function uploadToNas() {
+  if (!editor.value.trim()) { flash('文档为空，无需上传'); return; }
+  // 凭据缺失时本机输入一次，仅存 localStorage（不进仓库）
+  let auth = localStorage.getItem('nas-auth') || '';
+  if (!auth) {
+    auth = window.prompt('请输入 NAS 上传凭据（格式 user:password，仅本机保存）：', '') || '';
+    if (!auth) { flash('未配置 NAS 凭据，已取消上传'); return; }
+    try { localStorage.setItem('nas-auth', auth); } catch (_) {}
+  }
+  let authHeader = '';
+  try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return; }
+  const blob = new Blob([editor.value], { type: 'text/markdown' });
+  if (blob.size > NAS_MAX_BYTES) { flash('文件超过 200MB 上限，已取消'); return; }
+  const name = currentName.replace(/\.(md|markdown|txt|html?|pdf)$/i, '') + '.md';
+  const fd = new FormData();
+  fd.append('file', blob, name);
+  flash('正在上传到 NAS…');
+  try {
+    const resp = await fetch(NAS_UPLOAD_URL, {
+      method: 'POST',
+      headers: { 'Authorization': authHeader },
+      body: fd
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    let info = {};
+    try { info = await resp.json(); } catch (_) {}
+    flash('已上传到 NAS：' + (info.saved_as || info.filename || name));
+  } catch (e) {
+    console.error(e);
+    flash('上传失败：' + e.message + '（检查网络 / CORS）');
+  }
+}
+
+// 按文件名（或归档链接）从 NAS 取回文本；下载为只读公开接口，按示例不携带鉴权以免触发 CORS 预检
+async function downloadFromNas(input) {
+  const filename = extractNasFilename(input);
+  if (!filename) { flash('无法解析 NAS 文件名'); return null; }
+  const url = NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(filename);
+  flash('正在从 NAS 下载：' + filename + '…');
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return await resp.text();
+  } catch (e) {
+    console.error(e);
+    flash('下载失败：' + e.message + '（检查网络 / CORS）');
+    return null;
+  }
+}
+
+// 解析并打开（供菜单与粘贴共用）：下载后作为独立草稿载入编辑器
+async function nasOpen(input) {
+  const filename = extractNasFilename(input);
+  if (!filename) { flash('无法解析 NAS 文件名'); return; }
+  const text = await downloadFromNas(input);
+  if (text == null) return;
+  currentLibId = null;                 // 脱离文库上下文，作为独立草稿
+  currentName = filename;
+  editor.value = text;
+  updateFileName();
+  afterChange();
+  flash('已从 NAS 打开：' + filename);
+}
+
+// 菜单：从 NAS 下载某一篇文档并用编辑器打开
+async function nasDownloadAndOpen() {
+  const input = prompt('输入 NAS 文件名（如 180032_xxx.md）或 ' + NAS_ARCHIVE_DOMAIN + ' 归档链接：', '');
+  if (!input) return;
+  await nasOpen(input);
+}
+
+/* 粘贴 knowly.want.biz 归档链接时自动从 NAS 下载并打开（仅整串为一个该域名链接、且非其它输入框时触发） */
+document.addEventListener('paste', (e) => {
+  const dt = e.clipboardData || window.clipboardData;
+  if (!dt) return;
+  const text = (dt.getData('text') || '').trim();
+  if (!text) return;
+  if (!new RegExp('^https?://' + NAS_ARCHIVE_DOMAIN.replace(/\./g, '\\.') + '/\\S+$', 'i').test(text)) return;
+  if (e.target && e.target !== editor && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+  e.preventDefault();
+  nasOpen(text);
+});
+
 const moreMenu = $('#moreMenu');
 const btnMore = $('#btnMore');
 function openMoreMenu(open) {
@@ -703,6 +819,8 @@ moreMenu.addEventListener('click', (e) => {
   openMoreMenu(false);
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
+  else if (act === 'nas-upload') uploadToNas();
+  else if (act === 'nas-download') nasDownloadAndOpen();
   else if (act === 'copytext') copyText();
   else if (act === 'copymd') copyMarkdown();
   else if (act === 'copy') copyHTML();
