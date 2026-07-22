@@ -740,7 +740,11 @@ async function uploadToNas() {
       headers: { 'Authorization': authHeader },
       body: fd
     });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) {
+      let msg = 'HTTP ' + resp.status;
+      try { const j = await resp.json(); if (j && j.error) msg += '：' + j.error; } catch (_) {}
+      throw new Error(msg);
+    }
     let info = {};
     try { info = await resp.json(); } catch (_) {}
     flash('已上传到 NAS：' + (info.saved_as || info.filename || name));
@@ -767,11 +771,15 @@ async function downloadFromNas(input) {
   flash('正在从 NAS 下载：' + filename + '…');
   try {
     const resp = await fetch(url, { headers: { 'Authorization': authHeader } });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) {
+      let msg = 'HTTP ' + resp.status;
+      try { const j = await resp.json(); if (j && j.error) msg += '：' + j.error; } catch (_) {}
+      throw new Error(msg);
+    }
     return await resp.text();
   } catch (e) {
     console.error(e);
-    flash('下载失败：' + e.message + '（检查网络 / CORS / 凭据）');
+    flash('下载失败：' + e.message + '（服务端错误，检查 NAS 下载服务）');
     return null;
   }
 }
