@@ -912,6 +912,95 @@ if (aiModal) {
   });
 }
 
+/* ---------- 选中文字后的浮动 AI 气泡菜单（Floating Toolbar） ----------
+   思路：编辑器内划词选中 → 在选区上方浮出毛玻璃小工具条，点按即触发 AI_ACTIONS。
+   位置用"镜像 div"技术计算 textarea 内选区像素坐标（兼容软/硬换行与滚动）。 */
+const aiToolbar = $('#aiFloatingToolbar');
+let aiSel = { start: 0, end: 0 };
+
+// 计算 textarea 内某偏移量的像素坐标（内容坐标系，未扣滚动）
+function getTextareaCaretPos(el, position) {
+  const doc = el.ownerDocument;
+  const div = doc.createElement('div');
+  const style = getComputedStyle(el);
+  const copy = ['boxSizing', 'width', 'height', 'overflowX', 'overflowY',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize',
+    'lineHeight', 'fontFamily', 'textAlign', 'textTransform', 'textIndent',
+    'letterSpacing', 'wordSpacing', 'tabSize'];
+  copy.forEach((p) => { div.style[p] = style[p]; });
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  div.style.top = '0';
+  div.style.left = '0';
+  div.style.overflow = 'hidden';
+  div.style.whiteSpace = (el.wrap === 'off') ? 'pre' : 'pre-wrap';
+  div.style.wordWrap = (el.wrap === 'off') ? 'normal' : 'break-word';
+  div.textContent = el.value.substring(0, position);
+  const span = doc.createElement('span');
+  span.textContent = el.value.substring(position) || '.';
+  div.appendChild(span);
+  doc.body.appendChild(div);
+  const coords = {
+    top: span.offsetTop + parseInt(style.borderTopWidth) || 0,
+    left: span.offsetLeft + parseInt(style.borderLeftWidth) || 0,
+    height: parseInt(style.lineHeight) || (parseInt(style.fontSize) * 1.2)
+  };
+  doc.body.removeChild(div);
+  return coords;
+}
+
+function showAiToolbar() {
+  if (!aiToolbar) return;
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  if (s === e) { hideAiToolbar(); return; } // 无选区则隐藏
+  aiSel = { start: s, end: e };
+  const pos = getTextareaCaretPos(editor, e);           // 选区末端坐标（内容坐标）
+  const rect = editor.getBoundingClientRect();
+  const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
+  const y = rect.top + pos.top - editor.scrollTop;
+  aiToolbar.hidden = false;
+  const tw = aiToolbar.offsetWidth, th = aiToolbar.offsetHeight;
+  const left = Math.max(tw / 2 + 6, Math.min(x, window.innerWidth - tw / 2 - 6));
+  aiToolbar.style.left = left + 'px';
+  aiToolbar.style.top = y + 'px';
+  // 上方空间不足则翻到选区下方
+  const placeBelow = (y - th - 12) < 0;
+  aiToolbar.style.transform = placeBelow
+    ? 'translate(-50%, 12px)'
+    : 'translate(-50%, calc(-100% - 12px))';
+}
+
+function hideAiToolbar() {
+  if (aiToolbar) aiToolbar.hidden = true;
+}
+
+// 划词 / 键盘选择后浮出（用 setTimeout 等浏览器先把选区定好）
+editor.addEventListener('mouseup', () => setTimeout(showAiToolbar, 0));
+editor.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') showAiToolbar(); });
+
+// 点工具条按钮：先还原选区，再触发对应 AI 动作
+if (aiToolbar) {
+  aiToolbar.addEventListener('mousedown', (e) => e.preventDefault()); // 防止抢焦点导致选区丢失
+  aiToolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-ai]');
+    if (!btn) return;
+    const action = btn.dataset.ai;
+    hideAiToolbar();
+    editor.focus();
+    editor.setSelectionRange(aiSel.start, aiSel.end);
+    if (AI_ACTIONS[action]) AI_ACTIONS[action]();
+  });
+}
+
+// 选区外点击 / 滚动 / Esc 时收起
+document.addEventListener('mousedown', (ev) => {
+  if (aiToolbar && !aiToolbar.hidden && !aiToolbar.contains(ev.target)) hideAiToolbar();
+});
+window.addEventListener('scroll', hideAiToolbar, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideAiToolbar(); });
+
 
 /* ---------- NAS 同步：上传 / 下载 ----------
    凭据不写死在代码里（避免随仓库泄露）。

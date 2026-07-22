@@ -120,7 +120,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.19</span>
+      <span class="version">v1.11.20</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -177,6 +177,14 @@
   <input type="file" id="libFileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden />
 
   <!-- 浮动提示：上传/下载结果等 -->
+  <!-- 选中文字后浮动的 AI 气泡菜单 -->
+  <div id="aiFloatingToolbar" class="floating-toolbar" hidden role="toolbar" aria-label="AI 工具">
+    <button type="button" data-ai="aiPolish" title="润色选中文字">✨ 润色</button>
+    <button type="button" data-ai="aiExpand" title="扩写选中文字">📈 扩写</button>
+    <button type="button" data-ai="aiTranslate" title="翻译为英文">🌐 翻译</button>
+    <button type="button" data-ai="aiSummary" title="全文总结摘要">📝 总结</button>
+  </div>
+
   <div id="toast" class="toast" hidden></div>
 
   <!-- AI 设置弹窗（BYOK：Key 仅存本机 localStorage） -->
