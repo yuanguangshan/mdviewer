@@ -750,19 +750,28 @@ async function uploadToNas() {
   }
 }
 
-// 按文件名（或归档链接）从 NAS 取回文本；下载为只读公开接口，按示例不携带鉴权以免触发 CORS 预检
+// 按文件名（或归档链接）从 NAS 取回文本；与上传共用 Basic 鉴权（服务端要求鉴权，不携带会被 401 拒绝）
 async function downloadFromNas(input) {
   const filename = extractNasFilename(input);
   if (!filename) { flash('无法解析 NAS 文件名'); return null; }
+  // 凭据缺失时本机输入一次，仅存 localStorage（不进仓库）
+  let auth = localStorage.getItem('nas-auth') || '';
+  if (!auth) {
+    auth = window.prompt('请输入 NAS 下载凭据（格式 user:password，仅本机保存）：', '') || '';
+    if (!auth) { flash('未配置 NAS 凭据，已取消下载'); return null; }
+    try { localStorage.setItem('nas-auth', auth); } catch (_) {}
+  }
+  let authHeader = '';
+  try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return null; }
   const url = NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(filename);
   flash('正在从 NAS 下载：' + filename + '…');
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(url, { headers: { 'Authorization': authHeader } });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     return await resp.text();
   } catch (e) {
     console.error(e);
-    flash('下载失败：' + e.message + '（检查网络 / CORS）');
+    flash('下载失败：' + e.message + '（检查网络 / CORS / 凭据）');
     return null;
   }
 }
