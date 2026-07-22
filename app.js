@@ -773,6 +773,146 @@ const TEXT_ACTIONS = {
   }
 };
 
+/* ---------- AI 智能助理（BYOK：自带 Key，纯前端直连，零后端） ----------
+   设计：Key / endpoint / model 仅存本机 localStorage('md-ai-config')，绝不上传。
+   通过浏览器 fetch 直连兼容 OpenAI 格式的 /chat/completions 接口（OpenAI / DeepSeek / 中转 / 本地）。
+   新增功能只需在 AI_ACTIONS 里加一个函数 + 在 #sub-ai 加一个 data-action 按钮。 */
+const AI_CFG_KEY = 'md-ai-config';
+function readAiConfig() {
+  try { return JSON.parse(localStorage.getItem(AI_CFG_KEY) || '{}'); } catch (_) { return {}; }
+}
+async function callAiApi(promptText, systemPrompt) {
+  let cfg = readAiConfig();
+  let apiKey = cfg.apiKey;
+  const endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
+  const model = cfg.model || 'gpt-4o-mini';
+
+  // 未配置 Key：本机输入一次（不预置进代码/仓库）
+  if (!apiKey) {
+    apiKey = window.prompt('请输入 AI API Key（OpenAI / DeepSeek / 中转商，仅存本机）：', '');
+    if (!apiKey) { toast('未配置 AI Key', 'err'); return null; }
+    // 首次输入后询问是否保存，避免泄露到仓库
+    if (window.confirm('是否将此配置保留在本机 localStorage 以便下次使用？')) {
+      try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ apiKey, endpoint, model })); } catch (_) {}
+    }
+  }
+
+  toast('AI 正在思考…', 'info', 60000);
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: promptText }
+        ],
+        temperature: 0.7
+      })
+    });
+    if (!resp.ok) {
+      let msg = 'HTTP ' + resp.status;
+      try { const j = await resp.json(); if (j && j.error) msg += '：' + (j.error.message || j.error); } catch (_) {}
+      throw new Error(msg);
+    }
+    const data = await resp.json();
+    return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
+  } catch (e) {
+    console.error(e);
+    toast('AI 调用出错：' + e.message, 'err', 5000);
+    return null;
+  }
+}
+// 对选中文本执行 AI 变换后替换选区
+async function aiProcessSelection(systemPrompt, label) {
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const selected = editor.value.slice(s, e);
+  if (!selected) { toast('请先在编辑器中选中一段文本', 'err'); return; }
+  const r = await callAiApi(selected, systemPrompt);
+  if (r) {
+    editor.value = editor.value.slice(0, s) + r + editor.value.slice(e);
+    editor.selectionStart = s;
+    editor.selectionEnd = s + r.length;
+    afterChange();
+    toast('已' + label + '选中文字', 'ok');
+  }
+}
+const AI_ACTIONS = {
+  // 全文总结：在文首插入摘要 blockquote
+  aiSummary() {
+    const content = editor.value;
+    if (!content.trim()) { toast('文章为空', 'err'); return; }
+    (async () => {
+      const r = await callAiApi(content, '你是一名专业的写作助手。请为以下 Markdown 文章写一段精炼的中文摘要（300 字以内），只输出摘要正文，不要标题、序号或前缀：');
+      if (r) {
+        const block = '> **💡 AI 摘要**\n> ' + r.replace(/\n+/g, '\n> ') + '\n\n---\n\n';
+        editor.value = block + editor.value;
+        editor.selectionStart = editor.selectionEnd = 0;
+        afterChange();
+        toast('AI 摘要已插入文首', 'ok');
+      }
+    })();
+  },
+  // 润色选中文字
+  aiPolish() {
+    aiProcessSelection('请润色以下文本，使其更加流畅、专业、自然，保留原意与 Markdown 格式，只输出改写后的文本：', '润色');
+  },
+  // 扩写选中文字
+  aiExpand() {
+    aiProcessSelection('请基于以下要点/片段进行合理扩写，丰富细节与论证，保留 Markdown 格式，只输出扩写后的文本：', '扩写');
+  },
+  // 翻译为英文
+  aiTranslate() {
+    aiProcessSelection('将以下文本准确翻译为地道英文，保留 Markdown 格式，只输出译文：', '翻译');
+  },
+  // 按提示词生成文章，插入光标处
+  aiGenerate() {
+    const topic = window.prompt('请输入主题或提示词：', '');
+    if (!topic) { toast('已取消', 'info'); return; }
+    (async () => {
+      const r = await callAiApi(topic, '你是一名专业的写作助手和 Markdown 排版专家。请根据用户给出的主题，撰写一篇结构清晰、Markdown 格式的中文文章（含标题、小节、要点），只输出正文：');
+      if (r) { insertAtCursor(r + '\n\n'); toast('AI 已生成并插入', 'ok'); }
+    })();
+  },
+  // 打开 AI 设置
+  aiSettings() { openAiSettings(); }
+};
+
+/* AI 设置弹窗（BYOK） */
+function openAiSettings() {
+  const cfg = readAiConfig();
+  const ep = $('#aiEndpoint'), md = $('#aiModel'), key = $('#aiKey');
+  if (ep) ep.value = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
+  if (md) md.value = cfg.model || 'gpt-4o-mini';
+  if (key) key.value = cfg.apiKey || '';
+  const m = $('#aiSettingsModal');
+  if (m) m.hidden = false;
+}
+function saveAiSettings() {
+  const ep = $('#aiEndpoint').value.trim() || 'https://api.openai.com/v1/chat/completions';
+  const md = $('#aiModel').value.trim() || 'gpt-4o-mini';
+  const key = $('#aiKey').value.trim();
+  if (!key) { toast('请填写 API Key', 'err'); return; }
+  try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ endpoint: ep, model: md, apiKey: key })); } catch (_) {}
+  const m = $('#aiSettingsModal');
+  if (m) m.hidden = true;
+  toast('AI 配置已保存（仅本机）', 'ok');
+}
+const aiModal = $('#aiSettingsModal');
+if (aiModal) {
+  $('#aiSettingsSave').addEventListener('click', saveAiSettings);
+  $('#aiSettingsCancel').addEventListener('click', () => { aiModal.hidden = true; });
+  // 点击遮罩空白处关闭
+  aiModal.addEventListener('click', (e) => { if (e.target === aiModal) aiModal.hidden = true; });
+  // 回车保存 / Esc 关闭
+  aiModal.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveAiSettings(); }
+    else if (e.key === 'Escape') aiModal.hidden = true;
+  });
+}
+
+
 /* ---------- NAS 同步：上传 / 下载 ----------
    凭据不写死在代码里（避免随仓库泄露）。
    首次上传时在本机弹窗输入一次，仅存入浏览器 localStorage（不上传、不入 git）。
@@ -982,7 +1122,8 @@ menuWrap.addEventListener('click', (e) => {
   const macro = btn.dataset.action;
   if (macro) {
     openMoreMenu(false);
-    if (TEXT_ACTIONS[macro]) TEXT_ACTIONS[macro]();
+    const fn = TEXT_ACTIONS[macro] || AI_ACTIONS[macro];
+    if (fn) fn();
     return;
   }
   const act = btn.dataset.act;

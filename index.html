@@ -61,6 +61,7 @@
             <button role="menuitem" data-act="wrap" id="menuWrap">↩️ 换行：开</button>
             <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题 ▸</button>
             <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
+            <button role="menuitem" data-sub="ai" aria-haspopup="true" aria-expanded="false">✨ AI 智能助理 ▸</button>
             <div class="menu-sep"></div>
             <div class="menu-foot" role="presentation">Designed by yuanguangshan.</div>
           </div>
@@ -86,6 +87,17 @@
             <button role="menuitem" data-action="toUpperCase">🔠 转大写</button>
             <button role="menuitem" data-action="toLowerCase">🔡 转小写</button>
           </div>
+
+          <!-- 二级菜单：AI 智能助理 -->
+          <div class="menu sub" id="sub-ai" role="menu" aria-label="AI 智能助理" hidden>
+            <button role="menuitem" data-action="aiSummary">📝 全文总结摘要</button>
+            <button role="menuitem" data-action="aiPolish">✨ 润色选中文字</button>
+            <button role="menuitem" data-action="aiExpand">📈 扩写选中文字</button>
+            <button role="menuitem" data-action="aiTranslate">🌐 翻译为英文</button>
+            <button role="menuitem" data-action="aiGenerate">💡 按提示词生成</button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-action="aiSettings">⚙️ AI 设置（BYOK）</button>
+          </div>
         </div>
         <input type="file" id="fileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
       </div>
@@ -108,7 +120,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.18</span>
+      <span class="version">v1.11.19</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -166,6 +178,24 @@
 
   <!-- 浮动提示：上传/下载结果等 -->
   <div id="toast" class="toast" hidden></div>
+
+  <!-- AI 设置弹窗（BYOK：Key 仅存本机 localStorage） -->
+  <div class="modal" id="aiSettingsModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="AI 设置">
+      <div class="modal-title">✨ AI 设置（BYOK）</div>
+      <p class="modal-desc">自带 Key：仅保存在本机浏览器，绝不上传到任何服务器。</p>
+      <label for="aiEndpoint">API 地址（兼容 OpenAI 格式）</label>
+      <input id="aiEndpoint" type="text" spellcheck="false" placeholder="https://api.openai.com/v1/chat/completions" />
+      <label for="aiModel">模型</label>
+      <input id="aiModel" type="text" spellcheck="false" placeholder="gpt-4o-mini / deepseek-chat" />
+      <label for="aiKey">API Key</label>
+      <input id="aiKey" type="password" spellcheck="false" placeholder="sk-... / 你的中转 Key" />
+      <div class="modal-actions">
+        <button id="aiSettingsCancel" type="button">取消</button>
+        <button id="aiSettingsSave" type="button" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
 
   <script src="./app.js"></script>
 </body>
