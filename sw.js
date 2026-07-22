@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v1.11.29';
+const CACHE_NAME = 'md-editor-v1.11.30';
 
 const SHELL = [
   './',
@@ -45,13 +45,18 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
 
+  // 仅对 http/https 资源做缓存拦截。浏览器扩展注入的 chrome-extension://
+  // 等非常规 scheme 请求，Cache API 不支持（put 会抛 'Request scheme unsupported'），
+  // 直接透传、不缓存。
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
   // 导航请求（打开页面）：网络优先，失败回退到缓存的 index.html
   if (req.mode === 'navigate') {
     event.respondWith((async () => {
       try {
         const fresh = await fetch(req);
         const cache = await caches.open(CACHE_NAME);
-        cache.put('./index.html', fresh.clone());
+        try { await cache.put('./index.html', fresh.clone()); } catch (_) {}
         return fresh;
       } catch {
         const cache = await caches.open(CACHE_NAME);
@@ -68,8 +73,10 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(req);
-    const network = fetch(req).then((fresh) => {
-      if (fresh && (fresh.ok || fresh.type === 'opaque')) cache.put(req, fresh.clone());
+    const network = fetch(req).then(async (fresh) => {
+      if (fresh && (fresh.ok || fresh.type === 'opaque')) {
+        try { await cache.put(req, fresh.clone()); } catch (_) {}
+      }
       return fresh;
     }).catch(() => null);
     if (cached) {
