@@ -532,6 +532,7 @@ moreMenu.addEventListener('click', (e) => {
   const act = btn.dataset.act;
   openMoreMenu(false);
   if (act === 'rename') renameFile();
+  else if (act === 'addtolib') addToLibrary();
   else if (act === 'copytext') copyText();
   else if (act === 'copymd') copyMarkdown();
   else if (act === 'copy') copyHTML();
@@ -733,7 +734,8 @@ async function renderLibrary() {
     open.querySelector('.lib-item-time').textContent = fmtTime(d.updatedAt || Date.now());
     const acts = document.createElement('span');
     acts.className = 'lib-item-actions';
-    acts.innerHTML = '<button class="lib-act" data-act="rename" title="重命名">✏️</button>'
+    acts.innerHTML = '<button class="lib-act" data-act="download" title="下载为 .md">⬇️</button>'
+      + '<button class="lib-act" data-act="rename" title="重命名">✏️</button>'
       + '<button class="lib-act" data-act="delete" title="删除">🗑</button>';
     li.appendChild(open);
     li.appendChild(acts);
@@ -772,7 +774,8 @@ libList.addEventListener('click', (e) => {
   const actBtn = e.target.closest('.lib-act');
   if (actBtn) {
     const act = actBtn.dataset.act;
-    if (act === 'rename') renameLibDoc(id);
+    if (act === 'download') downloadLibDoc(id);
+    else if (act === 'rename') renameLibDoc(id);
     else if (act === 'delete') deleteLibDoc(id);
     return;
   }
@@ -824,6 +827,52 @@ async function deleteLibDoc(id) {
   }
   renderLibrary();
   flash('已删除');
+}
+
+/* 当前文档转存到文库（如从电脑打开的文章） */
+async function addToLibrary() {
+  if (currentLibId) { flash('当前已在文档库'); return; }
+  const doc = { id: genId(), name: currentName || '未命名.md', content: editor.value, updatedAt: Date.now() };
+  try {
+    await idbPut(doc);
+    currentLibId = doc.id;                                 // 之后编辑自动回写文库
+    localStorage.setItem('md-lib-current', doc.id);
+    setSaveState('saved', '✓ 文库');
+    renderLibrary();
+    flash('已加入文档库');
+  } catch (_) { flash('加入失败'); }
+}
+
+/* 文库条目下载为 .md 文件 */
+async function downloadLibDoc(id) {
+  try {
+    const doc = await idbGet(id);
+    if (!doc) return;
+    const name = (doc.name || '未命名.md').replace(/\.(html?|pdf)$/i, '') + '.md';
+    download(name, doc.content || '', 'text/markdown;charset=utf-8');
+    flash('已下载 ' + name);
+  } catch (_) { flash('下载失败'); }
+}
+
+/* 上传本地文档到文库（支持多选 / 手机文件选择器） */
+const libFileInput = $('#libFileInput');
+if (libFileInput) {
+  $('#libUpload').addEventListener('click', () => libFileInput.click());
+  libFileInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    let ok = 0;
+    for (const f of files) {
+      try {
+        const content = await f.text();
+        await idbPut({ id: genId(), name: f.name, content, updatedAt: Date.now() });
+        ok++;
+      } catch (_) {}
+    }
+    libFileInput.value = '';
+    renderLibrary();
+    flash(ok ? `已上传 ${ok} 个文档` : '上传失败');
+  });
 }
 
 /* 自动回写：打开文库文档后，每次编辑去抖写入 IndexedDB */

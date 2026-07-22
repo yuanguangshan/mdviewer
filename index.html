@@ -46,6 +46,7 @@
           <button id="btnMore" class="btn icon" title="更多操作" aria-label="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>
           <div class="menu" id="moreMenu" role="menu" hidden>
             <button role="menuitem" data-act="rename">✏️ 重命名</button>
+            <button role="menuitem" data-act="addtolib">📥 添加到文档库</button>
             <button role="menuitem" data-act="copytext">📋 复制文本</button>
             <button role="menuitem" data-act="copymd">📋 复制 Markdown</button>
             <button role="menuitem" data-act="copy">📋 复制 HTML</button>
@@ -85,7 +86,7 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.11.1</span>
+      <span class="version">v1.11.2</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -101,10 +102,12 @@
     <div class="lib-tools">
       <input class="lib-search" id="libSearch" type="search" placeholder="搜索文档…" aria-label="搜索文库文档" />
       <button class="btn primary lib-new" id="libNew">＋ 新建</button>
+      <button class="btn lib-upload" id="libUpload" title="上传本地文档到文库" aria-label="上传文档">⬆️ 上传</button>
     </div>
     <ul class="lib-list" id="libList"></ul>
     <div class="lib-empty" id="libEmpty" hidden>文库还是空的，点「＋ 新建」开始第一篇。</div>
   </aside>
+  <input type="file" id="libFileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden />
 
   <script src="./app.js"></script>
 </body>

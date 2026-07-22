@@ -535,6 +535,7 @@ body.no-editor .editor-pane { display: none; }
 }
 .lib-search:focus { border-color: var(--accent-soft); }
 .lib-new { flex: 0 0 auto; white-space: nowrap; }
+.lib-upload { flex: 0 0 auto; white-space: nowrap; }
 
 .lib-list {
   list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; min-height: 0;
