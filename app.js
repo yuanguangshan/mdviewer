@@ -172,6 +172,29 @@ $('#btnView').addEventListener('click', nextView);
   setView(isMobileLayout() ? 'edit' : 'split');
 }
 
+/* ---------- 全屏：隐藏工具栏/状态栏（+ 尝试浏览器原生全屏），右上角 ✕ 退出 ---------- */
+const btnFullscreen = $('#btnFullscreen');
+const btnExitFullscreen = $('#btnExitFullscreen');
+function setFullscreen(on) {
+  document.body.classList.toggle('fullscreen', on);
+  if (on) {
+    const el = document.documentElement;
+    if (el.requestFullscreen) { try { el.requestFullscreen(); } catch (_) {} }   // iOS 非视频不支持→仅应用级全屏
+  } else if (document.fullscreenElement) {
+    try { document.exitFullscreen(); } catch (_) {}
+  }
+}
+if (btnFullscreen) btnFullscreen.addEventListener('click', () => setFullscreen(true));
+if (btnExitFullscreen) btnExitFullscreen.addEventListener('click', () => setFullscreen(false));
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && document.body.classList.contains('fullscreen')) {
+    document.body.classList.remove('fullscreen');   // 原生全屏被 Esc 退出时同步应用状态
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('fullscreen')) setFullscreen(false);
+});
+
 /* ---------- 同步滚动（编辑 ↔ 预览，仅双栏）---------- */
 let isSyncing = false;
 function syncScroll(src, dst) {

@@ -55,6 +55,19 @@ body {
 .brand-logo .brand-dot { fill: var(--text); }
 .brand span { color: var(--accent-soft); }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar-left { display: flex; align-items: center; gap: 8px; }
+.btn-fs { display: inline-flex; align-items: center; justify-content: center; }
+/* 全屏模式：隐藏工具栏/状态栏，工作区填满；右上角浮动 ✕ 退出 */
+body.fullscreen .toolbar,
+body.fullscreen .statusbar { display: none; }
+.exit-fs {
+  position: fixed; top: 12px; right: 12px; z-index: 9999;
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text);
+  font-size: 15px; line-height: 1; cursor: pointer; box-shadow: var(--shadow); display: none;
+}
+.exit-fs:hover { color: var(--accent-soft); border-color: var(--accent-soft); }
+body.fullscreen .exit-fs { display: inline-flex; align-items: center; justify-content: center; }
 
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--bg-elev);

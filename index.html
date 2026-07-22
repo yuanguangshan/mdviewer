@@ -31,7 +31,10 @@
 <body>
   <div class="app">
     <header class="toolbar">
+      <div class="toolbar-left">
       <div class="brand"><svg class="brand-logo" viewBox="0 0 512 512" width="26" height="26" role="img" aria-label="mdviewer"><defs><linearGradient id="brandGrad1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#4f46e5"/></linearGradient><linearGradient id="brandGrad2" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs><rect x="140" y="110" width="80" height="40" rx="8" fill="url(#brandGrad1)"/><rect x="292" y="110" width="80" height="40" rx="8" fill="url(#brandGrad1)"/><path d="M170 210h172c15 0 25 12 18 25l-45 80c-8 14-26 22-42 22h-58c-16 0-34-8-42-22l-45-80c-7-13 3-25 18-25z" fill="none" stroke="url(#brandGrad2)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/><circle class="brand-dot" cx="256" cy="350" r="18" fill="#e6e9ef"/></svg><span>mdviewer</span></div>
+      <button id="btnFullscreen" class="btn icon btn-fs" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
+      </div>
       <div class="actions">
         <button id="btnNew" class="btn icon" title="新建 (Ctrl+Alt+N)" aria-label="新建文档">📄</button>
         <button id="btnOpen" class="btn icon" title="打开本地文件 (Ctrl+O)" aria-label="打开文件">📂</button>
@@ -81,8 +84,9 @@
       <span id="fileName">未命名.md</span>
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
-      <span class="version">v1.10.4</span>
+      <span class="version">v1.10.5</span>
     </footer>
+    <button id="btnExitFullscreen" class="exit-fs" title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
   </div>
 
   <script src="./app.js"></script>
