@@ -702,6 +702,78 @@ async function exportPDF() {
   }
 }
 
+/* ---------- 文本宏命令（Micro-Plugin / Text Pipeline） ----------
+   每个宏命令都是一个纯函数：读 editor.value（当前文章纯文本），
+   做字符串变换后写回 editor.value，并调用 afterChange() 触发渲染/统计/草稿保存/文库回写。
+   新增功能只需在 TEXT_ACTIONS 里加一个函数 + 在 moreMenu 加一个 data-action 按钮。 */
+function commitText(next, label) {
+  if (next === editor.value) { flash('文本无变化：' + label); return; }
+  editor.value = next;
+  afterChange();
+  flash('已应用：' + label);
+}
+
+const TEXT_ACTIONS = {
+  // 1. 全局查找替换（支持正则开关）
+  searchReplace() {
+    const target = window.prompt('要查找的文本（留空取消）：', '') || '';
+    if (!target) { flash('已取消'); return; }
+    const useRe = window.confirm('把查找内容当作正则表达式？(取消=纯文本)');
+    const replacement = window.prompt('替换为：', '') || '';
+    if (replacement === null) { flash('已取消'); return; }
+    const src = editor.value;
+    let out, count;
+    if (useRe) {
+      let re;
+      try { re = new RegExp(target, 'g'); } catch (e) { flash('正则无效：' + e.message); return; }
+      count = (src.match(re) || []).length;
+      out = src.replace(re, replacement);
+    } else {
+      const parts = src.split(target);
+      count = Math.max(0, parts.length - 1);
+      out = parts.join(replacement);
+    }
+    if (count === 0) { flash('未找到匹配项：' + target); return; }
+    commitText(out, `查找替换（${count} 处）`);
+  },
+
+  // 2. 中英文之间自动加空格（Typographic 美化）
+  formatSpacing() {
+    let t = editor.value
+      .replace(/([\u4e00-\u9fa5])([A-Za-z0-9])/g, '$1 $2')
+      .replace(/([A-Za-z0-9])([\u4e00-\u9fa5])/g, '$1 $2');
+    commitText(t, '中英排版优化');
+  },
+
+  // 3. 清除所有空行
+  removeEmptyLines() {
+    commitText(editor.value.replace(/^\s*[\r\n]/gm, ''), '清除空行');
+  },
+
+  // 4. 去除每行首尾空白
+  trimLines() {
+    commitText(editor.value.replace(/^[ \t]+|[ \t]+$/gm, ''), '去除行首尾空白');
+  },
+
+  // 5. 按行排序（去重可选? 这里不去重，保留顺序稳定性由 sort 保证）
+  sortLines() {
+    const lines = editor.value.split(/\r?\n/);
+    const before = lines.length;
+    lines.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+    commitText(lines.join('\n'), `按行排序（${before} 行）`);
+  },
+
+  // 6. 转大写
+  toUpperCase() {
+    commitText(editor.value.toUpperCase(), '转大写');
+  },
+
+  // 7. 转小写
+  toLowerCase() {
+    commitText(editor.value.toLowerCase(), '转小写');
+  }
+};
+
 /* ---------- NAS 同步：上传 / 下载 ----------
    凭据不写死在代码里（避免随仓库泄露）。
    首次上传时在本机弹窗输入一次，仅存入浏览器 localStorage（不上传、不入 git）。
@@ -883,10 +955,16 @@ document.addEventListener('click', (e) => {
   }
 });
 moreMenu.addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-act]');
+  const btn = e.target.closest('[data-act], [data-action]');
   if (!btn) return;
   const act = btn.dataset.act;
   openMoreMenu(false);
+  // 自定义文本宏命令（data-action）
+  const macro = btn.dataset.action;
+  if (macro) {
+    if (TEXT_ACTIONS[macro]) TEXT_ACTIONS[macro]();
+    return;
+  }
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
   else if (act === 'nas-upload') uploadToNas();
