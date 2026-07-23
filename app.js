@@ -8,24 +8,84 @@ const gutter = $('#gutter');
 const editorHighlight = $('#editorHighlight');
 const fileInput = $('#fileInput');
 
-// 自愈守卫：关键按钮缺失 = SW 更新过渡期 HTML/JS 版本错配，刷新一次拉一致版本（限一次防死循环）
+// 自愈守卫：关键按钮（#btnMore）缺失 = SW 更新过渡期 HTML/JS 版本错配。
+// 旧版用 sessionStorage 仅限一次刷新，若错配持续（SW 一直没切到新版本）则无能为力；
+// 改为 localStorage + 时间戳，60s 冷却窗口内最多自愈一次：既防刷新死循环，
+// 又允许错配持续时在下个冷却窗口重新拉取一致版本。
+const SELFHEAL_KEY = 'md-selfheal-ts';
+const SELFHEAL_COOLDOWN_MS = 60 * 1000;
 if (!document.querySelector('#btnMore')) {
-  if (!sessionStorage.getItem('md-selfheal')) {
-    sessionStorage.setItem('md-selfheal', '1');
+  const last = Number(localStorage.getItem(SELFHEAL_KEY) || 0);
+  const now = Date.now();
+  if (now - last > SELFHEAL_COOLDOWN_MS) {
+    localStorage.setItem(SELFHEAL_KEY, String(now));
     location.reload();
   }
 }
+
+/* ===================== SECTION INDEX ===================== */
+// 机器可解析分区标记统一格式： // === SECTION: <标题> ===
+// 提取正则： ^// === SECTION: (.+) ===$
+//   小工具
+//   DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用）
+//   主题：auto / light / dark，auto 跟随系统
+//   预览主题：github / onedark / solarized / nord（独立于 app 主题）
+//   渲染 + 代码高亮
+//   KaTeX 数学公式（按需懒加载，与 mermaid 同策略）
+//   锚点同步滚动辅助
+//   Blob 图片：入库 + 解析
+//   编辑器源码高亮：textarea 之上叠一层 <pre>，复用 hljs 自带 markdown 语法
+//   编辑器换行：开=软换行（无横向滚动、隐藏行号）；关=不换行（保留行号逐行对齐）
+//   统计 / 行号 / 光标位置
+//   视图：双栏 / 编辑 / 预览
+//   全屏：隐藏工具栏/状态栏（+ 尝试浏览器原生全屏），右上角 ✕ 退出
+//   同步滚动（编辑 ↔ 预览，仅双栏）
+//   草稿自动保存（去抖 + 静默 + 容错）
+//   文件名 / 草稿载入 / 内容变更统一刷新
+//   打开文件
+//   保存
+//   未命名文档：保存时从首行自动派生标题
+//   新建 / 重命名
+//   复制 HTML（复用预览结果）
+//   导出 HTML / 打印 PDF
+//   文本宏命令（Micro-Plugin / Text Pipeline）
+//   选区包裹 / 行前缀（格式化快捷键的底层原语）
+//   AI 智能助理（BYOK：自带 Key，纯前端直连，零后端）
+//   AI 流式打字机浮层
+//   选中文字后的浮动 AI 气泡菜单（Floating Toolbar）
+//   格式刷：选中文字浮出的 WPS 风格工具条
+//   NAS 同步：上传 / 下载
+//   文库静默增量同步（本地→NAS，单向）
+//   拖拽 / 粘贴图片（转 base64 插入光标处）
+//   Tab 插入两空格
+//   全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"）
+//   菜单快捷键提示（自动渲染，无需手写每处）
+//   注册 Service Worker（PWA 离线 / 可安装）
+//   响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐
+//   文库（本地文档库，IndexedDB 持久化；打开文档后编辑自动回写）
+//   初始化
+//   微信协作分享：基于 Cloudflare R2 + Worker 的中转站
+//   布局：左右交换 + 可拖拽分隔线
+//   Vanilla JS 微型 Vim 引擎 (Micro-Vim Engine)
+/* ======================================================== */
 
 let currentFileHandle = null;   // FileSystemFileHandle（支持时用于原地保存）
 let currentName = '未命名.md';
 let currentNameIsAuto = false;   // 当前标题是否由「首行自动派生」而来（手动改名/打开文件则置 false）
 let currentShareId = null;       // 当前协作分享的 R2 文件名（null = 非协作文档）
-// Cloudflare Worker 公开域名（仅公开端点，不含任何密钥/凭据）。
-// 注意：若该域名已被 R2 存储桶的「公开访问/自定义域」占用，请给 Worker 单独分配子域
-//（如 share-api.want.biz）并在此修改，否则 DNS/CNAME 会冲突导致两者都不可用。
+// ============================================================
+// 配置契约：R2_WORKER_URL（微信协作分享中转端点）
+// - 这是【唯一】与后端/部署耦合的常量，修改前请确认以下三处保持一致：
+//   1) Cloudflare Worker 路由 / 自定义域：share.want.biz 需为独立子域，
+//      勿与 R2 存储桶「公开访问」自定义域冲突，否则 DNS/CNAME 会互相覆盖；
+//   2) 微信内打开走自定义域比 *.workers.dev 国内更稳，建议保持 share.want.biz；
+//   3) 前端仅持有此【公开端点】，R2 凭据只写在 Worker 绑定的 R2_BUCKET 里，
+//      绝不下发、不入 git（密钥永不进会被提交的代码）。
+// - 若需切换分享后端，仅需改这一行 + 同步上面三项，前端其余逻辑不用动。
+// ============================================================
 const R2_WORKER_URL = 'https://share.want.biz';
 
-/* ---------- 小工具 ---------- */
+// === SECTION: 小工具 ===
 function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -34,7 +94,7 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 }
 
-/* ---------- DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用）---------- */
+// === SECTION: DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用） ===
 if (window.DOMPurify) {
   DOMPurify.addHook('beforeSanitizeAttributes', (node) => {
     if (node.tagName === 'IMG') {
@@ -53,7 +113,7 @@ if (window.DOMPurify) {
   });
 }
 
-/* ---------- 主题：auto / light / dark，auto 跟随系统 ---------- */
+// === SECTION: 主题：auto / light / dark，auto 跟随系统 ===
 const THEME_CYCLE = ['auto', 'light', 'dark'];
 const THEME_ICON = { auto: '🌓', light: '☀️', dark: '🌙' };
 const THEME_LABEL = { auto: '自动', light: '亮色', dark: '暗色' };
@@ -74,7 +134,7 @@ function applyTheme(mode) {
 mql.addEventListener('change', () => { if (themeMode === 'auto') applyTheme('auto'); });
 applyTheme(themeMode);
 
-/* ---------- 预览主题：github / onedark / solarized / nord（独立于 app 主题）---------- */
+// === SECTION: 预览主题：github / onedark / solarized / nord（独立于 app 主题） ===
 const MD_THEME_CYCLE = ['github', 'onedark', 'solarized', 'nord'];
 const MD_THEME_LABEL = { github: 'GitHub', onedark: 'One Dark', solarized: 'Solarized', nord: 'Nord' };
 let mdThemeMode = localStorage.getItem('md-mdtheme') || 'github';
@@ -88,7 +148,7 @@ function applyMdTheme(mode) {
   });
 }
 
-/* ---------- 渲染 + 代码高亮 ---------- */
+// === SECTION: 渲染 + 代码高亮 ===
 let renderTimer = null;
 // 懒加载大体积第三方库（避免首屏同步下载数 MB）
 function loadScript(src) {
@@ -150,7 +210,7 @@ async function renderMermaidDiagrams() {
     console.warn('Mermaid 渲染失败:', e);
   }
 }
-/* ---------- KaTeX 数学公式（按需懒加载，与 mermaid 同策略）---------- */
+// === SECTION: KaTeX 数学公式（按需懒加载，与 mermaid 同策略） ===
 let katexCssInjected = false;
 let katexLoading = null;
 function injectKatexCss() {
@@ -236,7 +296,7 @@ function renderMarkdown() {
   resolveImages();
 }
 
-/* ---------- 锚点同步滚动辅助 ---------- */
+// === SECTION: 锚点同步滚动辅助 ===
 let lastSanitizedHtml = '';
 let headingLineMap = new Map();
 let anchorNavLock = 0;
@@ -281,7 +341,7 @@ function onPreviewAnchorClick(e) {
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
 }
 
-/* ---------- Blob 图片：入库 + 解析 ---------- */
+// === SECTION: Blob 图片：入库 + 解析 ===
 let imgUrlCache = new Map();   // id -> { blob }
 let activeImgUrls = new Set();
 function blobToDataURL(blob) {
@@ -327,7 +387,7 @@ function scheduleRender() {
   renderTimer = setTimeout(renderMarkdown, 120);
 }
 
-/* ---------- 编辑器源码高亮：textarea 之上叠一层 <pre>，复用 hljs 自带 markdown 语法 ---------- */
+// === SECTION: 编辑器源码高亮：textarea 之上叠一层 <pre>，复用 hljs 自带 markdown 语法 ===
 function renderEditorHighlight() {
   // 移动端（软换行）或缺 markdown 语法时不启用：避免错位 / 降级为纯文本
   if (window.innerWidth <= 760 || !window.hljs || !hljs.getLanguage || !hljs.getLanguage('markdown')) {
@@ -348,7 +408,7 @@ function syncHighlightScroll() {
   editorHighlight.scrollLeft = editor.scrollLeft;
 }
 
-/* ---------- 编辑器换行：开=软换行（无横向滚动、隐藏行号）；关=不换行（保留行号逐行对齐）---------- */
+// === SECTION: 编辑器换行：开=软换行（无横向滚动、隐藏行号）；关=不换行（保留行号逐行对齐） ===
 let wrapMode = localStorage.getItem('md-wrap') !== 'off';
 function applyWrap() {
   editor.wrap = wrapMode ? 'soft' : 'off';
@@ -359,7 +419,7 @@ function applyWrap() {
   syncHighlightScroll();
 }
 
-/* ---------- 统计 / 行号 / 光标位置 ---------- */
+// === SECTION: 统计 / 行号 / 光标位置 ===
 function updateStats() {
   const t = editor.value;
   const cjkRe = /[一-鿿぀-ヿ가-힯]/g;
@@ -385,7 +445,7 @@ function updatePos() {
   $('#posInfo').textContent = '行 ' + line + '，列 ' + col;
 }
 
-/* ---------- 视图：双栏 / 编辑 / 预览 ---------- */
+// === SECTION: 视图：双栏 / 编辑 / 预览 ===
 const VIEW_CYCLE = ['split', 'edit', 'preview'];
 const VIEW_LABEL = { split: '分屏', edit: '编辑', preview: '预览' };
 let viewMode = 'split';
@@ -412,7 +472,7 @@ $('#btnView').addEventListener('click', nextView);
   setView(isMobileLayout() ? 'edit' : 'split');
 }
 
-/* ---------- 全屏：隐藏工具栏/状态栏（+ 尝试浏览器原生全屏），右上角 ✕ 退出 ---------- */
+// === SECTION: 全屏：隐藏工具栏/状态栏（+ 尝试浏览器原生全屏），右上角 ✕ 退出 ===
 const btnFullscreen = $('#btnFullscreen');
 const btnExitFullscreen = $('#btnExitFullscreen');
 function setFullscreen(on) {
@@ -442,7 +502,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.body.classList.contains('fullscreen')) setFullscreen(false);
 });
 
-/* ---------- 同步滚动（编辑 ↔ 预览，仅双栏）---------- */
+// === SECTION: 同步滚动（编辑 ↔ 预览，仅双栏） ===
 let isSyncing = false;
 function syncScroll(src, dst) {
   if (isSyncing || viewMode !== 'split') return;
@@ -463,7 +523,7 @@ editor.addEventListener('scroll', () => {
 previewPane.addEventListener('scroll', () => syncScroll(previewPane, editor));
 preview.addEventListener('click', onPreviewAnchorClick);   // 预览内点击 #锚点 → 同步滚动编辑器到对应行
 
-/* ---------- 草稿自动保存（去抖 + 静默 + 容错）---------- */
+// === SECTION: 草稿自动保存（去抖 + 静默 + 容错） ===
 let curSaveClass = '';
 let curSaveText = '就绪';
 function setSaveState(cls, text) {
@@ -511,7 +571,7 @@ function toast(msg, type, ms) {
   }, ms || 3200);
 }
 
-/* ---------- 文件名 / 草稿载入 / 内容变更统一刷新 ---------- */
+// === SECTION: 文件名 / 草稿载入 / 内容变更统一刷新 ===
 function updateFileName() {
   const el = $('#fileName');
   el.textContent = currentName;
@@ -536,7 +596,7 @@ function afterChange(opts) {
 editor.addEventListener('input', afterChange);
 ['keyup', 'click', 'select'].forEach((ev) => editor.addEventListener(ev, updatePos));
 
-/* ---------- 打开文件 ---------- */
+// === SECTION: 打开文件 ===
 $('#btnOpen').addEventListener('click', openFile);
 async function openFile() {
   if ('showOpenFilePicker' in window) {
@@ -579,7 +639,7 @@ fileInput.addEventListener('change', (e) => {
   fileInput.value = '';
 });
 
-/* ---------- 保存 ---------- */
+// === SECTION: 保存 ===
 $('#btnSave').addEventListener('click', saveFile);
 async function saveFile() {
   ensureNameFromContent();          // 未命名文档：保存时按首行自动命名
@@ -625,7 +685,7 @@ async function saveFile() {
   flash('已下载 ' + currentName);
 }
 
-/* ---------- 未命名文档：保存时从首行自动派生标题 ---------- */
+// === SECTION: 未命名文档：保存时从首行自动派生标题 ===
 /* 从正文首个非空行派生标题：
    - 去除行首 Markdown 标记（标题 / 引用 / 列表 / 警告块等）
    - 文件系统特殊字符与控制字符统一转为下划线；空白也转下划线（slug 化，便于下载与同步）
@@ -692,7 +752,7 @@ function ensureNameFromContent() {
   return false;
 }
 
-/* ---------- 新建 / 重命名 ---------- */
+// === SECTION: 新建 / 重命名 ===
 $('#btnNew').addEventListener('click', async () => {
   if (editor.value.trim() && !confirm('新建文档？未保存的内容将丢失。')) return;
   currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
@@ -728,7 +788,7 @@ function renameFile() {
   }
 }
 
-/* ---------- 复制 HTML（复用预览结果）---------- */
+// === SECTION: 复制 HTML（复用预览结果） ===
 async function copyHTML() {
   try {
     await navigator.clipboard.writeText(preview.innerHTML);
@@ -761,7 +821,7 @@ async function copyMarkdown() {
   }
 }
 
-/* ---------- 导出 HTML / 打印 PDF ---------- */
+// === SECTION: 导出 HTML / 打印 PDF ===
 const EXPORT_CSS = [
   'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;background:#fff;color:#1a2030;max-width:860px;margin:0 auto;padding:32px 24px;line-height:1.75}',
   '.markdown-body h1,.markdown-body h2,.markdown-body h3{line-height:1.3;margin:1.2em 0 .6em;font-weight:700}',
@@ -867,10 +927,9 @@ async function exportPDF() {
   }
 }
 
-/* ---------- 文本宏命令（Micro-Plugin / Text Pipeline） ----------
-   每个宏命令都是一个纯函数：读 editor.value（当前文章纯文本），
-   做字符串变换后写回 editor.value，并调用 afterChange() 触发渲染/统计/草稿保存/文库回写。
-   新增功能只需在 TEXT_ACTIONS 里加一个函数 + 在 moreMenu 加一个 data-action 按钮。 */
+// === SECTION: 文本宏命令（Micro-Plugin / Text Pipeline） ===
+// 每个宏命令都是一个纯函数：读 editor.value（当前文章纯文本），
+// 做字符串变换后写回 editor.value，并调用 afterChange() 触发渲染/统计/草稿保存/文库回写。
 function commitText(next, label) {
   if (next === editor.value) { flash('文本无变化：' + label); return; }
   editor.value = next;
@@ -939,10 +998,9 @@ const TEXT_ACTIONS = {
   }
 };
 
-/* ---------- 选区包裹 / 行前缀（格式化快捷键的底层原语）----------
-   wrapSelection：用 before/after 包裹当前选区；无选区则插入占位文字并把光标落在内部。
-   prefixLines：对选区所跨的整行逐行施加变换（引用 / 列表 / 标题用）。
-   两者都触发 input 事件，从而走 afterChange（渲染 / 统计 / 草稿 / 文库回写）。 */
+// === SECTION: 选区包裹 / 行前缀（格式化快捷键的底层原语） ===
+// wrapSelection：用 before/after 包裹当前选区；无选区则插入占位文字并把光标落在内部。
+// prefixLines：对选区所跨的整行逐行施加变换（引用 / 列表 / 标题用）。
 function wrapSelection(before, after, placeholder) {
   const s = editor.selectionStart, e = editor.selectionEnd;
   const sel = editor.value.slice(s, e) || placeholder || '';
@@ -992,10 +1050,9 @@ const FORMAT_ACTIONS = {
   fmtH6: () => setHeading(6),
 };
 
-/* ---------- AI 智能助理（BYOK：自带 Key，纯前端直连，零后端） ----------
-   设计：Key / endpoint / model 仅存本机 localStorage('md-ai-config')，绝不上传。
-   通过浏览器 fetch 直连兼容 OpenAI 格式的 /chat/completions 接口（OpenAI / DeepSeek / 中转 / 本地）。
-   新增功能只需在 AI_ACTIONS 里加一个函数 + 在 #sub-ai 加一个 data-action 按钮。 */
+// === SECTION: AI 智能助理（BYOK：自带 Key，纯前端直连，零后端） ===
+// 设计：Key / endpoint / model 仅存本机 localStorage('md-ai-config')，绝不上传。
+// 通过浏览器 fetch 直连兼容 OpenAI 格式的 /chat/completions 接口（OpenAI / DeepSeek / 中转 / 本地）。
 const AI_CFG_KEY = 'md-ai-config';
 function readAiConfig() {
   try { return JSON.parse(localStorage.getItem(AI_CFG_KEY) || '{}'); } catch (_) { return {}; }
@@ -1099,7 +1156,7 @@ async function callAiApi(promptText, systemPrompt) {
   return streamAiApi(promptText, systemPrompt, null, { quiet: false });
 }
 
-/* ---------- AI 流式打字机浮层 ---------- */
+// === SECTION: AI 流式打字机浮层 ===
 let aiStreamAbort = null;   // 当前流式请求的 AbortController
 let aiStreamApply = null;   // 完成后的"应用"回调
 let aiStreamFull = '';      // 已生成全文
@@ -1296,9 +1353,8 @@ if (aiStreamPanelEl) {
   });
 }
 
-/* ---------- 选中文字后的浮动 AI 气泡菜单（Floating Toolbar） ----------
-   思路：编辑器内划词选中 → 在选区上方浮出毛玻璃小工具条，点按即触发 AI_ACTIONS。
-   位置用"镜像 div"技术计算 textarea 内选区像素坐标（兼容软/硬换行与滚动）。 */
+// === SECTION: 选中文字后的浮动 AI 气泡菜单（Floating Toolbar） ===
+// 思路：编辑器内划词选中 → 在选区上方浮出毛玻璃小工具条，点按即触发 AI_ACTIONS。
 const aiToolbar = $('#aiFloatingToolbar');
 let aiSel = { start: 0, end: 0 };
 
@@ -1360,7 +1416,7 @@ function hideAiToolbar() {
   if (aiToolbar) aiToolbar.hidden = true;
 }
 
-/* ---------- 格式刷：选中文字浮出的 WPS 风格工具条 ---------- */
+// === SECTION: 格式刷：选中文字浮出的 WPS 风格工具条 ===
 const formatBrush = $('#formatBrush');
 let fmtSel = null;            // 记录当前选区，供按钮点击后还原
 
@@ -1434,10 +1490,9 @@ window.addEventListener('scroll', () => { hideAiToolbar(); hideFormatBrush(); },
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideAiToolbar(); hideFormatBrush(); } });
 
 
-/* ---------- NAS 同步：上传 / 下载 ----------
-   凭据不写死在代码里（避免随仓库泄露）。
-   首次上传时在本机弹窗输入一次，仅存入浏览器 localStorage（不上传、不入 git）。
-   也可在控制台预置：localStorage.setItem('nas-auth','user:password') */
+// === SECTION: NAS 同步：上传 / 下载 ===
+// 凭据不写死在代码里（避免随仓库泄露）。
+// 首次上传时在本机弹窗输入一次，仅存入浏览器 localStorage（不上传、不入 git）。
 const NAS_UPLOAD_URL = 'https://upload.want.biz/api/upload';
 const NAS_DOWNLOAD_URL = 'https://upload.want.biz/api/uploads/download';
 const NAS_ARCHIVE_DOMAIN = 'knowly.want.biz';
@@ -1591,11 +1646,10 @@ async function nasDownloadAndOpen() {
   await nasOpen(input);
 }
 
-/* ---------- 文库静默增量同步（本地→NAS，单向）----------
-   文库每篇改动后，自动把「updatedAt 晚于上次同步时间」的文档推到 NAS。
-   文件名用文库 id（{id}.md）：稳定唯一、可增量匹配、绝不重名覆盖。
-   单向：NAS 永不主动推回编辑器；用户需要时手动「从 NAS 下载」即可。
-   静默：仅状态栏小圆点提示，不打扰。 */
+// === SECTION: 文库静默增量同步（本地→NAS，单向） ===
+// 文库每篇改动后，自动把「updatedAt 晚于上次同步时间」的文档推到 NAS。
+// 文件名用文库 id（{id}.md）：稳定唯一、可增量匹配、绝不重名覆盖。
+// 单向：NAS 永不主动推回编辑器；用户需要时手动「从 NAS 下载」即可。
 const NAS_SYNC_STATE_KEY = 'nas-sync-state';
 const SYNC_DEBOUNCE_MS = 4000;
 
@@ -1739,7 +1793,7 @@ window.addEventListener('afterprint', () => {
   printPrevTheme = null;
 });
 
-/* ---------- 拖拽 / 粘贴图片（转 base64 插入光标处）---------- */
+// === SECTION: 拖拽 / 粘贴图片（转 base64 插入光标处） ===
 function fileToDataURL(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -1799,7 +1853,7 @@ editor.addEventListener('drop', (e) => {
   if (img) { e.preventDefault(); insertImage(img); }
 });
 
-/* ---------- Tab 插入两空格 ---------- */
+// === SECTION: Tab 插入两空格 ===
 editor.addEventListener('keydown', (e) => {
   if (e.key === 'Tab') {
     e.preventDefault();
@@ -1810,10 +1864,9 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-/* ---------- 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"）----------
-   mod = Ctrl(Linux/Win) 或 ⌘(macOS)；alt = Alt / ⌥；shift = Shift / ⇧
-   新增快捷键：在 SHORTCUTS 追加一行 + 在 ACTION_HINTS 登记对应菜单项即可，
-   菜单会自动显示快捷键提示，无需改动分发逻辑。 */
+// === SECTION: 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"） ===
+// mod = Ctrl(Linux/Win) 或 ⌘(macOS)；alt = Alt / ⌥；shift = Shift / ⇧
+// 新增快捷键：在 SHORTCUTS 追加一行 + 在 ACTION_HINTS 登记对应菜单项即可，
 const SHORTCUTS = new Map([
   // 文件 / 文档
   ['mod+s', saveFile],
@@ -1858,7 +1911,7 @@ document.addEventListener('keydown', (e) => {
   if (handler) { e.preventDefault(); handler(); }
 });
 
-/* ---------- 菜单快捷键提示（自动渲染，无需手写每处）---------- */
+// === SECTION: 菜单快捷键提示（自动渲染，无需手写每处） ===
 /* 菜单项（data-act / data-action）→ 归一化组合键；与 SHORTCUTS 的 key 一致 */
 const ACTION_HINTS = {
   rename: 'mod+shift+r', addtolib: 'mod+shift+l',
@@ -1892,7 +1945,7 @@ function renderShortcutHints() {
   });
 }
 
-/* ---------- 注册 Service Worker（PWA 离线 / 可安装）---------- */
+// === SECTION: 注册 Service Worker（PWA 离线 / 可安装） ===
 /* 部署后新版本提示：检测到新 SW 安装完成（且当前有旧 SW 在控制页面）时，
    弹出非阻塞提示条，用户点击「立即刷新」即应用新版本，无需反复手动硬刷。 */
 if ('serviceWorker' in navigator) {
@@ -1927,7 +1980,7 @@ if ('serviceWorker' in navigator) {
   if (db) db.addEventListener('click', hideUpdateBanner);
 }
 
-/* ---------- 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ---------- */
+// === SECTION: 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ===
 function applyResponsive() {
   if (isMobileLayout() && viewMode === 'split') setView('edit');   // 旋屏/缩窗进入手机布局时，若仍停在分屏则退回编辑（手机不分屏）
   renderEditorHighlight();   // 进入/离开移动端时重算覆盖层显隐（换行由用户偏好 applyWrap 控制）
@@ -1935,7 +1988,7 @@ function applyResponsive() {
 window.addEventListener('resize', debounce(applyResponsive, 200));
 applyResponsive();
 
-/* ---------- 文库（本地文档库，IndexedDB 持久化；打开文档后编辑自动回写）---------- */
+// === SECTION: 文库（本地文档库，IndexedDB 持久化；打开文档后编辑自动回写） ===
 let currentLibId = null;   // 当前打开的文库文档 id（非文库文档时为 null）
 
 const LIB_DB = 'md-library';
@@ -2305,11 +2358,10 @@ async function showHistoryModal(docId) {
   flash('已恢复至历史版本');
 }
 
-/* ---------- 初始化 ---------- */
-/* ---------- 微信协作分享：基于 Cloudflare R2 + Worker 的中转站 ----------
-   前端仅持有 Worker 的【公开端点】URL；R2 凭据写在 Cloudflare Worker 的绑定里，
-   绝不下发到前端、不入 git（符合“密钥永不写进会被提交代码”的原则）。
-   链接即密码：Worker 用随机短码做 key，无法被猜到。 */
+// === SECTION: 初始化 ===
+// === SECTION: 微信协作分享：基于 Cloudflare R2 + Worker 的中转站 ===
+// 前端仅持有 Worker 的【公开端点】URL；R2 凭据写在 Cloudflare Worker 的绑定里，
+// 绝不下发到前端、不入 git（符合“密钥永不写进会被提交代码”的原则）。
 async function shareViaR2() {
   if (!R2_WORKER_URL) { flash('未配置分享服务地址'); return; }
   if (!editor.value.trim()) { flash('文档为空，无法分享'); return; }
@@ -2419,12 +2471,10 @@ async function initLibrary() {
   loadDraft();     // 无文库上下文 → 加载草稿
 }
 
-/* ============================================================
-   布局：左右交换 + 可拖拽分隔线
-   - 交换：.workspace 加 .swapped（flex row-reverse）
-   - 拖拽：调整 --editor-w（编辑器面板 flex-basis），预览区自适应
-   - 偏好持久化到 localStorage，刷新后保留
-   ============================================================ */
+// === SECTION: 布局：左右交换 + 可拖拽分隔线 ===
+// - 交换：.workspace 加 .swapped（flex row-reverse）
+// - 拖拽：调整 --editor-w（编辑器面板 flex-basis），预览区自适应
+// - 偏好持久化到 localStorage，刷新后保留
 let isLayoutSwapped = localStorage.getItem('md-layout-swapped') === '1';
 let editorWidthPx = parseFloat(localStorage.getItem('md-editor-width')) || null;
 const menuLayoutToggle = $('#menuLayout');
@@ -2546,17 +2596,15 @@ if (navigator.storage && navigator.storage.persist) {
 }
 setSyncDot('idle', 'NAS 自动同步已就绪');
 
-/* ============================================================
-   Vanilla JS 微型 Vim 引擎 (Micro-Vim Engine)
-   适配原生 <textarea>，支持 Normal / Insert 模式与核心操作。
-   设计要点：
-   - #vimBlockCursor 必须是 .editor-wrap 的子元素（.editor-wrap 为
-     position:relative），这样 editor.offsetLeft/Top 与 getTextareaCaretPos
-     返回的内容坐标才共用同一参考系，方块光标才能精准贴合字符。
-   - keydown 以【捕获阶段】注册，抢在 editor 自带的 Tab 缩进处理（冒泡阶段）
-     之前拦截，避免 Normal 模式下按 Tab 误插入空格。
-   - j/k 移动后只滚动、不重置光标列（scrollEditorToLine 会把光标跳到行首）。
-   ============================================================ */
+// === SECTION: Vanilla JS 微型 Vim 引擎 (Micro-Vim Engine) ===
+// 适配原生 <textarea>，支持 Normal / Insert 模式与核心操作。
+// 设计要点：
+// - #vimBlockCursor 必须是 .editor-wrap 的子元素（.editor-wrap 为
+// position:relative），这样 editor.offsetLeft/Top 与 getTextareaCaretPos
+// 返回的内容坐标才共用同一参考系，方块光标才能精准贴合字符。
+// - keydown 以【捕获阶段】注册，抢在 editor 自带的 Tab 缩进处理（冒泡阶段）
+// 之前拦截，避免 Normal 模式下按 Tab 误插入空格。
+// - j/k 移动后只滚动、不重置光标列（scrollEditorToLine 会把光标跳到行首）。
 
 let isVimMode = localStorage.getItem('md-vim-mode') === '1';
 let vimState = 'normal';            // 'normal' | 'insert'
