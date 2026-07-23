@@ -2714,7 +2714,7 @@ function vimKeydown(e) {
 
   const val = editor.value;
   let s = editor.selectionStart;
-  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // 单字符归一化（Shift+J 等也能命中）
+  const key = e.key;   // Vim 中大小写代表不同指令（A=行尾插入 / a=后插入，G=跳文末 / g=gg 缓冲），不归一化
   // 非上下移动（j/k）即重置理想列，使下次垂直移动以当前光标列为基准
   if (key !== 'j' && key !== 'k') vimIdealColumn = -1;
 
