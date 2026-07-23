@@ -728,11 +728,15 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 [data-md-theme="nord"] .markdown-body .hljs-link { color: #8fbcbb; }
 
 /* ---------- 文库：左侧抽屉 ---------- */
+/* 文库按钮改为纯图标，文档数做图标右上角通知角标（有数量时显红） */
+.lib-toggle { position: relative; }
 .lib-toggle .lib-count {
+  position: absolute; top: -4px; right: -4px;
+  min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px;
-  font-size: 10px; font-weight: 700; line-height: 1;
-  color: #fff; background: var(--accent); border-radius: 9px;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  color: #fff; background: var(--accent); border-radius: 50%;
+  border: 1.5px solid var(--bg-soft);
 }
 .lib-toggle .lib-count[hidden] { display: none; }
 
