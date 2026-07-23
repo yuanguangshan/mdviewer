@@ -574,6 +574,7 @@ fileInput.addEventListener('change', (e) => {
 /* ---------- 保存 ---------- */
 $('#btnSave').addEventListener('click', saveFile);
 async function saveFile() {
+  ensureNameFromContent();          // 未命名文档：保存时按首行自动命名
   const content = editor.value;
   // 文库文档：内容已自动回写，Ctrl+S 仅作确认提示（仍可用「…」菜单导出 HTML/PDF）
   if (currentLibId) {
@@ -613,6 +614,52 @@ async function saveFile() {
   // 3) 回退：下载
   download(currentName, content, 'text/markdown;charset=utf-8');
   flash('已下载 ' + currentName);
+}
+
+/* ---------- 未命名文档：保存时从首行自动派生标题 ---------- */
+/* 从正文首个非空行派生标题：
+   - 去除行首 Markdown 标记（标题 / 引用 / 列表 / 警告块等）
+   - 文件系统特殊字符与控制字符统一转为下划线；空白也转下划线（slug 化，便于下载与同步）
+   - 截断到前 100 字，避免标题过长 */
+function deriveTitleFromContent() {
+  const text = (editor.value || '').replace(/\r\n?/g, '\n');
+  let first = '';
+  for (const ln of text.split('\n')) {
+    const t = ln.trim();
+    if (t) { first = t; break; }
+  }
+  if (!first) return '';
+  first = first
+    .replace(/^#{1,6}\s+/, '')           // # 标题
+    .replace(/^>\s+/, '')                 // > 引用
+    .replace(/^[-*+]\s+/, '')             // - 无序列表
+    .replace(/^\d+[.)]\s+/, '')           // 1. 有序列表
+    .replace(/^\[!?[A-Za-z]+\]\s*/, '')   // [!NOTE] 警告块
+    .trim();
+  let name = first
+    .replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, '_')  // 文件系统非法 / 控制字符 → 下划线
+    .replace(/\s+/g, '_')                          // 空白 → 下划线（文件名友好）
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (name.length > 100) name = name.slice(0, 100).replace(/_+$/g, '');
+  return name;
+}
+
+/* 文档无名（未命名）时，从正文首行派生标题；派生成功后返回 true */
+function ensureNameFromContent() {
+  const isUnnamed = !currentName || currentName === '未命名.md' ||
+                    /^未命名(\.\w+)?$/i.test(currentName);
+  if (!isUnnamed) return false;
+  const derived = deriveTitleFromContent();
+  if (!derived) return false;
+  const ext = /\.\w+$/.test(currentName) ? currentName.slice(currentName.lastIndexOf('.')) : '.md';
+  currentName = derived + ext;
+  updateFileName();
+  if (currentLibId) {                        // 文库文档：同步列表项标题
+    const nameEl = libList.querySelector('.lib-item.active .lib-item-name');
+    if (nameEl) nameEl.textContent = currentName;
+  }
+  return true;
 }
 
 /* ---------- 新建 / 重命名 ---------- */
@@ -1964,6 +2011,7 @@ const MAX_HISTORY = 20;
 const writebackLibDebounced = debounce(() => { writebackLib(); }, 800);
 function writebackLib() {
   if (!currentLibId || !libDb) return;
+  ensureNameFromContent();          // 未命名文库文档：首次编辑即按首行自动命名
   const newContent = editor.value;
   idbGet(currentLibId).then((oldDoc) => {
     const history = (oldDoc && oldDoc.history) || [];
