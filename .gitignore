@@ -1,2 +1,9 @@
 .DS_Store
 .workbuddy
+
+# Cloudflare Worker 源码：仅本地维护，部署到 Cloudflare，不跟踪进 Pages 仓库
+worker/
+
+# wrangler 本地缓存/状态（防止从根目录跑 wrangler 时污染仓库）
+.wrangler/
+node_modules/
