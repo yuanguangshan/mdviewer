@@ -1329,6 +1329,22 @@ if (shareModal) {
   $('#shareCloseBtn').addEventListener('click', () => { shareModal.hidden = true; });
   shareModal.addEventListener('click', (e) => { if (e.target === shareModal) shareModal.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !shareModal.hidden) shareModal.hidden = true; });
+
+// 发布到博客结果弹窗：复制 / 打开 / 关闭（背景点击 + ESC 亦关闭）
+const blogPublishModal = $('#blogPublishModal');
+if (blogPublishModal) {
+  const blogUrl = $('#blogUrlText');
+  const copyBlogUrl = () => {
+    if (!blogUrl || !blogUrl.value) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(blogUrl.value).then(() => toast('已复制博客链接', 'ok'), () => toast('复制失败', 'err'));
+    else { blogUrl.select(); try { document.execCommand('copy'); toast('已复制博客链接', 'ok'); } catch (_) { toast('复制失败', 'err'); } }
+  };
+  $('#blogCopyBtn').addEventListener('click', copyBlogUrl);
+  $('#blogOpenBtn').addEventListener('click', () => { if (blogUrl && blogUrl.value) window.open(blogUrl.value, '_blank', 'noopener'); });
+  $('#blogCloseBtn').addEventListener('click', () => { blogPublishModal.hidden = true; });
+  blogPublishModal.addEventListener('click', (e) => { if (e.target === blogPublishModal) blogPublishModal.hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !blogPublishModal.hidden) blogPublishModal.hidden = true; });
+}
 }
 
 /* AI 流式打字机浮层按钮：应用 / 取消 / 停止 */
@@ -1765,6 +1781,7 @@ menuWrap.addEventListener('click', (e) => {
   openMoreMenu(false);
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
+  else if (act === 'publish-blog') publishToBlog();
   else if (act === 'nas-upload') uploadToNas();
   else if (act === 'nas-download') nasDownloadAndOpen();
   else if (act === 'copytext') copyText();
@@ -1781,6 +1798,130 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'layout-swap') toggleLayoutSwap();
   else if (act === 'layout-reset') resetLayout();
 });
+
+// === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===
+// 博客后端地址：如需自托管，仅改这一行即可（与 R2_WORKER_URL 同属「唯一后端耦合点」约定）。
+const BLOG_PUBLISH_URL = 'https://api.yuangs.cc/api/publish';
+const BLOG_TARGETS = ['blog'];
+const BLOG_TITLE_MAX_LEN = 40;
+
+// 默认标签：年月（如 202607）
+function defaultBlogTags() {
+  const d = new Date();
+  return '' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+// 智能截断为标题：优先按句号/问号/感叹号/换行截断，再按长度截断
+function blogSmartCut(str, maxLen) {
+  const s = str.replace(/\s+/g, ' ').trim();
+  const idx = [
+    s.indexOf('。'), s.indexOf('！'), s.indexOf('？'),
+    s.indexOf('. '), s.indexOf('! '), s.indexOf('? '), s.indexOf('\n')
+  ].filter(i => i >= 0);
+  const punct = idx.length ? Math.min(...idx) : -1;
+  let cut = punct >= 0 ? s.slice(0, punct) : s;
+  if (cut.length > maxLen) cut = cut.slice(0, maxLen);
+  return cut || 'Untitled';
+}
+
+// 解析 YAML Front Matter 与标题（优先 front matter → 第一个 H1 → 正文智能截断）
+function parseBlogMeta(markdown) {
+  const meta = {};
+  let body = markdown;
+  const fm = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (fm) {
+    body = markdown.slice(fm[0].length);
+    fm[1].split(/\r?\n/).forEach(line => {
+      const m = line.match(/^([^:#\s][^:]*):\s*(.*)$/);
+      if (m) {
+        const k = m[1].trim().toLowerCase();
+        let v = m[2].trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+        if (k === 'tags') {
+          try { meta.tags = v.startsWith('[') ? JSON.parse(v.replace(/'/g, '"')) : v.split(',').map(s => s.trim()).filter(Boolean); }
+          catch (_) { meta.tags = v.split(',').map(s => s.trim()).filter(Boolean); }
+        } else { meta[k] = v; }
+      }
+    });
+  }
+  let title = meta.title;
+  if (!title) {
+    const h1 = body.match(/^\s{0,3}#\s+(.+?)\s*$/m);
+    if (h1) title = h1[1].trim();
+  }
+  if (!title) {
+    const firstNonEmptyLine = body.split(/\r?\n/).find(l => l.trim().length > 0) || '';
+    title = blogSmartCut(firstNonEmptyLine, BLOG_TITLE_MAX_LEN);
+  } else if (title.length > BLOG_TITLE_MAX_LEN) {
+    title = blogSmartCut(title, BLOG_TITLE_MAX_LEN);
+  }
+  return { title: title || 'Untitled', tags: Array.isArray(meta.tags) ? meta.tags : [], body };
+}
+
+// Markdown 转纯文本（content 字段）
+function blogMdToPlain(markdown) {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`+/g, '')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/!\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
+    .replace(/(\*\*|__|\*|_)/g, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function blogPostJSON(url, json) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(json)
+  });
+  let data = {};
+  try { data = await resp.json(); } catch (_) {}
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + '：' + (typeof data === 'string' ? data : JSON.stringify(data)));
+  return data;
+}
+
+function showBlogResult(url) {
+  const modal = $('#blogPublishModal');
+  const ta = $('#blogUrlText');
+  if (ta) ta.value = url || '';
+  if (modal) modal.removeAttribute('hidden');
+  if (url && navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+  toast('✅ 博客发布成功', 'ok');
+}
+
+async function publishToBlog() {
+  const md = (editor.value || '').trim();
+  if (!md) { flash('没有内容：请先写点东西再发布'); return; }
+  flash('正在发布到博客…');
+  try {
+    const { title, tags, body } = parseBlogMeta(md);
+    const payload = {
+      title,
+      content: blogMdToPlain(body),
+      content_md: body,
+      tags: (Array.isArray(tags) && tags.length) ? tags.join(',') : defaultBlogTags(),
+      targets: BLOG_TARGETS
+    };
+    const result = await blogPostJSON(BLOG_PUBLISH_URL, payload);
+    const blog = result && result.blog;
+    if (blog && blog.status === 'success') {
+      showBlogResult(blog.redirect_url || '');
+      flash('已发布到博客');
+    } else {
+      const msg = blog ? (blog.message || JSON.stringify(blog)) : JSON.stringify(result);
+      toast('❌ 发布失败：' + msg, 'err', 5000);
+      flash('发布失败');
+    }
+  } catch (err) {
+    toast('❌ 发布失败：' + (err.message || err), 'err', 5000);
+    flash('发布失败');
+  }
+}
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
 let printPrevTheme = null;
