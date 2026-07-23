@@ -1874,16 +1874,30 @@ function blogMdToPlain(markdown) {
     .trim();
 }
 
-async function blogPostJSON(url, json, extraHeaders) {
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {}),
-    body: JSON.stringify(json)
-  });
-  let data = {};
-  try { data = await resp.json(); } catch (_) {}
-  if (!resp.ok) throw new Error('HTTP ' + resp.status + '：' + (typeof data === 'string' ? data : JSON.stringify(data)));
-  return data;
+async function blogPostJSON(url, json, extraHeaders, timeoutMs) {
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const t = timeoutMs || 20000;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), t) : null;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {}),
+      body: JSON.stringify(json),
+      signal: ctrl ? ctrl.signal : undefined
+    });
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok) {
+      const msg = (data && (data.message || data.error)) ? (data.message || data.error) : JSON.stringify(data);
+      throw new Error('HTTP ' + resp.status + '：' + msg);
+    }
+    return data;
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('请求超时（' + (t / 1000) + 's），请稍后重试');
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function showBlogResult(url) {
@@ -1949,13 +1963,19 @@ async function publishToPodcast() {
       targets: ['nas'],
       transform: 'read'
     };
-    const result = await blogPostJSON(BLOG_PUBLISH_URL, payload, { 'X-App-ID': 'mdviewer-quick-read' });
-    const nas = result && result.nas;
-    if (nas && nas.status === 'success') {
-      toast('✅ 已加入 NAS 直读队列', 'ok');
+    // 注意：不要带自定义请求头（如 X-App-ID），否则浏览器会发 CORS 预检(OPTIONS)，
+    // 若服务端不响应预检请求就会一直挂起、既不成功也不失败。与「发布到博客」保持完全相同的请求形态。
+    const result = await blogPostJSON(BLOG_PUBLISH_URL, payload);
+    // 成功判定兼容多种响应结构：后端可能返回 {nas:{...}} / {read:{...}} / {status:'success'} 等。
+    // 因为 blogPostJSON 在 HTTP 非 2xx 时已抛错，能走到这里说明服务端已接受（2xx），
+    // 仅当响应里显式含错误信号时才判为失败。
+    const field = (result && (result.nas || result.read)) || {};
+    const isErr = !!(result && (result.status === 'error' || result.error || field.status === 'error' || field.success === false));
+    if (!isErr) {
+      toast('✅ 已加入 NAS 直读队列', 'ok', 4000);
       flash('已加入朗读队列');
     } else {
-      const msg = nas ? (nas.message || JSON.stringify(nas)) : JSON.stringify(result);
+      const msg = (field && (field.message || field.error)) || (result && (result.message || result.error)) || JSON.stringify(result);
       toast('❌ 转播客失败：' + msg, 'err', 5000);
       flash('转播客失败');
     }
