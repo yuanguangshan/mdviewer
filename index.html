@@ -144,7 +144,7 @@
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v2.0.5</span>
+      <span class="version">v2.0.6</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -256,6 +256,20 @@
           <button id="aiSettingsSave" type="button" class="primary">保存</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- 微信协作分享弹窗：明文可见链接 + 复制按钮，不依赖 prompt/clipboard 静默 -->
+  <div class="modal" id="shareModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="协作链接">
+      <div class="modal-title">🔗 协作链接已生成</div>
+      <p class="modal-desc">复制下面的链接，发到微信给好友即可共同编辑。链接即密码，请勿外泄。</p>
+      <textarea id="shareUrlText" class="share-url" readonly rows="3" aria-label="协作链接" spellcheck="false"></textarea>
+      <div id="shareTip" class="share-tip"></div>
+      <div class="modal-actions">
+        <button id="shareCopyBtn" type="button">📋 复制链接</button>
+        <button id="shareCloseBtn" type="button" class="primary">完成</button>
+      </div>
     </div>
   </div>
 

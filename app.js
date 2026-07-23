@@ -1265,6 +1265,15 @@ if (aiModal) {
   });
 }
 
+// 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
+const shareModal = $('#shareModal');
+if (shareModal) {
+  $('#shareCopyBtn').addEventListener('click', copyShareUrl);
+  $('#shareCloseBtn').addEventListener('click', () => { shareModal.hidden = true; });
+  shareModal.addEventListener('click', (e) => { if (e.target === shareModal) shareModal.hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !shareModal.hidden) shareModal.hidden = true; });
+}
+
 /* AI 流式打字机浮层按钮：应用 / 取消 / 停止 */
 const aiStreamPanelEl = document.getElementById('aiStreamPanel');
 if (aiStreamPanelEl) {
@@ -2287,17 +2296,54 @@ async function shareViaR2() {
     const resData = await resp.json();
     currentShareId = resData.id;
     const shareUrl = `${location.origin}${location.pathname}?share_r2=${encodeURIComponent(currentShareId)}`;
-    const text = `【协作】点击链接即可在微信内直接编辑：\n${shareUrl}`;
-    try {
-      await navigator.clipboard.writeText(text);
-      toast('✅ 协作链接已复制！去微信粘贴发给好友', 'ok', 5000);
-    } catch (_) {
-      // 非安全上下文（file:// 等）剪贴板不可用 → 弹窗让用户手动复制
-      prompt('复制此协作链接发给好友：', shareUrl);
-      toast('已生成协作链接（请手动复制）', 'ok', 5000);
-    }
+    showShareModal(shareUrl);   // 弹出可见链接 + 复制按钮，不依赖静默剪贴板 / prompt
   } catch (e) {
     toast('❌ 生成协作链接失败：' + (e.message || e), 'err', 5000);
+  }
+}
+
+// 弹出可见的分享弹窗（明文链接 + 复制按钮），彻底不依赖 prompt / 静默剪贴板
+function showShareModal(shareUrl) {
+  const m = $('#shareModal');
+  if (!m) return;
+  const ta = $('#shareUrlText');
+  if (ta) ta.value = shareUrl;
+  const tip = $('#shareTip');
+  if (tip) tip.textContent = '';
+  m.hidden = false;
+}
+
+// 复制按钮：优先 clipboard，失败用 textarea + execCommand 兜底（兼容 file:// 与微信内置浏览器）
+function copyShareUrl() {
+  const ta = $('#shareUrlText');
+  const url = ta ? ta.value : '';
+  if (!url) return;
+  const mark = (ok) => {
+    const tip = $('#shareTip');
+    if (tip) tip.textContent = ok ? '✓ 已复制到剪贴板' : '复制失败，请长按上方链接手动复制';
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => mark(true)).catch(() => mark(fallbackCopy(url)));
+    return;
+  }
+  mark(fallbackCopy(url));
+}
+
+function fallbackCopy(txt) {
+  try {
+    const el = document.createElement('textarea');
+    el.value = txt;
+    el.style.position = 'fixed';
+    el.style.top = '-9999px';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(el);
+    return ok;
+  } catch (_) {
+    return false;
   }
 }
 
