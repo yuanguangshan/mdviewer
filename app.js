@@ -2423,6 +2423,7 @@ setSyncDot('idle', 'NAS 自动同步已就绪');
 let isVimMode = localStorage.getItem('md-vim-mode') === '1';
 let vimState = 'normal';            // 'normal' | 'insert'
 let vimBuffer = '';                 // 组合键缓存，如 'd' 等待下一个 'd'
+let vimIdealColumn = -1;            // j/k 垂直移动的理想列（跨短行记忆、回长行回弹）；-1 表示需以当前列为基准重算
 const vimStatusEl = $('#vimStatus');
 const vimBlockCursor = $('#vimBlockCursor');
 const menuVimToggle = $('#menuVim');
@@ -2485,19 +2486,43 @@ function vimHalfPage() {
   return Math.max(1, Math.floor(pageRows / 2));
 }
 
-// 按行移动光标（n>0 下、n<0 上），保持列偏移（短行钳到行尾）；Ctrl+M 时 toLineStart=true 移到行首
+// 安全替换 textarea 区间文本并保留原生撤销栈（避免 editor.value= 清空撤销历史，使 Vim 的 u 失效）
+// 优先 execCommand('insertText')（触发 input 事件、保留 Undo）；极旧环境兜底 setRangeText（会丢撤销栈）
+function replaceTextSafely(start, end, newText, caretPos) {
+  editor.focus();
+  editor.setSelectionRange(start, end);
+  let ok = false;
+  try { ok = document.execCommand('insertText', false, newText); } catch (_) { ok = false; }
+  if (!ok) {
+    editor.setRangeText(newText, start, end, 'end');
+    editor.dispatchEvent(new Event('input'));
+  }
+  const cp = (caretPos == null) ? (start + newText.length) : caretPos;
+  editor.selectionStart = editor.selectionEnd = cp;
+}
+
+// 按行移动光标（n>0 下、n<0 上），保持理想列（短行钳到行尾、回长行回弹）；Ctrl+M 时 toLineStart=true 移到行首
 function vimMoveByLines(n, toLineStart) {
   const val = editor.value;
   const s = editor.selectionStart;
   const curLineStart = val.lastIndexOf('\n', s - 1) + 1;
-  const offset = s - curLineStart;
+  const curCol = s - curLineStart;
   const lines = val.split('\n');
   const curIdx = val.slice(0, s).split('\n').length - 1;
   let targetIdx = curIdx + n;
   if (targetIdx < 0) targetIdx = 0;
   if (targetIdx >= lines.length) targetIdx = lines.length - 1;
   const tgtLine = lines[targetIdx];
-  const col = toLineStart ? 0 : Math.min(offset, tgtLine.length);
+
+  let col;
+  if (toLineStart) {
+    col = 0;
+    vimIdealColumn = -1;                                   // 行首移动后重置理想列
+  } else {
+    if (vimIdealColumn === -1) vimIdealColumn = curCol;    // 首次进入垂直序列，以当前列为基准
+    col = Math.min(vimIdealColumn, tgtLine.length);         // 钳到目标行实际长度；理想列本身保留，便于回弹
+  }
+
   let pos = 0;
   for (let i = 0; i < targetIdx; i++) pos += lines[i].length + 1;
   pos += col;
@@ -2552,6 +2577,8 @@ function vimKeydown(e) {
   const val = editor.value;
   let s = editor.selectionStart;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // 单字符归一化（Shift+J 等也能命中）
+  // 非上下移动（j/k）即重置理想列，使下次垂直移动以当前光标列为基准
+  if (key !== 'j' && key !== 'k') vimIdealColumn = -1;
 
   // 1. 双键组合（dd / yy / gg）
   if (vimBuffer) {
@@ -2560,10 +2587,9 @@ function vimKeydown(e) {
       let lineEnd = val.indexOf('\n', s);
       if (lineEnd === -1) lineEnd = val.length; else lineEnd++;
       const lineText = val.slice(lineStart, lineEnd);
-      editor.value = val.slice(0, lineStart) + val.slice(lineEnd);
-      editor.selectionStart = editor.selectionEnd = lineStart;
+      vimIdealColumn = -1;
+      replaceTextSafely(lineStart, lineEnd, '', lineStart);
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(lineText).catch(() => {});
-      afterChange();
     } else if (vimBuffer === 'y' && key === 'y') {
       const lineStart = val.lastIndexOf('\n', s - 1) + 1;
       let lineEnd = val.indexOf('\n', s);
@@ -2597,16 +2623,14 @@ function vimKeydown(e) {
   } else if (key === 'o') {
     let lineEnd = val.indexOf('\n', s);
     if (lineEnd === -1) lineEnd = val.length;
-    editor.value = val.slice(0, lineEnd) + '\n' + val.slice(lineEnd);
-    editor.selectionStart = editor.selectionEnd = lineEnd + 1;
+    vimIdealColumn = -1;
+    replaceTextSafely(lineEnd, lineEnd, '\n', lineEnd + 1);
     vimState = 'insert';
-    afterChange();
   } else if (key === 'O') {
     const lineStart = val.lastIndexOf('\n', s - 1) + 1;
-    editor.value = val.slice(0, lineStart) + '\n' + val.slice(lineStart);
-    editor.selectionStart = editor.selectionEnd = lineStart;
+    vimIdealColumn = -1;
+    replaceTextSafely(lineStart, lineStart, '\n', lineStart);
     vimState = 'insert';
-    afterChange();
   }
 
   // 3. 光标移动 hjkl + 行列端点
@@ -2633,9 +2657,8 @@ function vimKeydown(e) {
   // 4. 编辑与操作
   else if (key === 'x') {
     if (s < val.length && val[s] !== '\n') {
-      editor.value = val.slice(0, s) + val.slice(s + 1);
-      editor.selectionStart = editor.selectionEnd = s;
-      afterChange();
+      vimIdealColumn = -1;
+      replaceTextSafely(s, s + 1, '', s);
     }
   } else if (key === 'u') {
     document.execCommand('undo');
@@ -2643,10 +2666,8 @@ function vimKeydown(e) {
     if (navigator.clipboard && navigator.clipboard.readText) {
       navigator.clipboard.readText().then((clip) => {
         if (!clip) return;
-        const v = editor.value;
-        editor.value = v.slice(0, s + 1) + clip + v.slice(s + 1);
-        editor.selectionStart = editor.selectionEnd = s + 1 + clip.length;
-        afterChange();
+        vimIdealColumn = -1;
+        replaceTextSafely(s + 1, s + 1, clip, s + 1 + clip.length);
       }).catch(() => {});
     } else {
       toast('当前环境不支持读取剪贴板');
