@@ -1660,6 +1660,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'wrap') { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }
   else if (act === 'theme') applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]);
   else if (act === 'mdtheme') applyMdTheme(btn.dataset.val);
+  else if (act === 'vim') toggleVimMode();
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
@@ -2247,3 +2248,226 @@ if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().catch(() => {});       // 请求持久化，避免文库被浏览器当缓存清
 }
 setSyncDot('idle', 'NAS 自动同步已就绪');
+
+/* ============================================================
+   Vanilla JS 微型 Vim 引擎 (Micro-Vim Engine)
+   适配原生 <textarea>，支持 Normal / Insert 模式与核心操作。
+   设计要点：
+   - #vimBlockCursor 必须是 .editor-wrap 的子元素（.editor-wrap 为
+     position:relative），这样 editor.offsetLeft/Top 与 getTextareaCaretPos
+     返回的内容坐标才共用同一参考系，方块光标才能精准贴合字符。
+   - keydown 以【捕获阶段】注册，抢在 editor 自带的 Tab 缩进处理（冒泡阶段）
+     之前拦截，避免 Normal 模式下按 Tab 误插入空格。
+   - j/k 移动后只滚动、不重置光标列（scrollEditorToLine 会把光标跳到行首）。
+   ============================================================ */
+
+let isVimMode = localStorage.getItem('md-vim-mode') === '1';
+let vimState = 'normal';            // 'normal' | 'insert'
+let vimBuffer = '';                 // 组合键缓存，如 'd' 等待下一个 'd'
+const vimStatusEl = $('#vimStatus');
+const vimBlockCursor = $('#vimBlockCursor');
+const menuVimToggle = $('#menuVim');
+
+// 切换 Vim 模式（由「⋯」菜单 data-act="vim" 触发）
+function toggleVimMode() {
+  isVimMode = !isVimMode;
+  localStorage.setItem('md-vim-mode', isVimMode ? '1' : '0');
+  vimState = 'normal';
+  vimBuffer = '';
+  if (menuVimToggle) menuVimToggle.textContent = '🟩 Vim 模式：' + (isVimMode ? '开' : '关');
+  updateVimUI();
+  if (isVimMode) editor.focus();
+}
+
+// 刷新界面：状态栏文字 + 方块光标（仅 Normal 模式显示）
+function updateVimUI() {
+  if (menuVimToggle) menuVimToggle.textContent = '🟩 Vim 模式：' + (isVimMode ? '开' : '关');
+
+  if (!isVimMode) {
+    if (vimStatusEl) vimStatusEl.hidden = true;
+    if (vimBlockCursor) vimBlockCursor.hidden = true;
+    if (editor.parentElement) editor.parentElement.classList.remove('vim-normal');
+    return;
+  }
+
+  if (vimStatusEl) {
+    vimStatusEl.hidden = false;
+    vimStatusEl.textContent = vimState === 'normal'
+      ? (vimBuffer ? `-- NORMAL (${vimBuffer}) --` : '-- NORMAL --')
+      : '-- INSERT --';
+  }
+
+  if (vimState === 'normal') {
+    if (editor.parentElement) editor.parentElement.classList.add('vim-normal');
+    if (vimBlockCursor) {
+      const pos = getTextareaCaretPos(editor, editor.selectionStart);
+      const charWidth = parseInt(getComputedStyle(editor).fontSize, 10) * 0.6;   // 等宽字体近似字宽
+      vimBlockCursor.style.left = (editor.offsetLeft + pos.left - editor.scrollLeft) + 'px';
+      vimBlockCursor.style.top = (editor.offsetTop + pos.top - editor.scrollTop) + 'px';
+      vimBlockCursor.style.width = Math.max(charWidth, 8) + 'px';
+      vimBlockCursor.style.height = (pos.height || 25) + 'px';
+      vimBlockCursor.hidden = false;
+    }
+  } else {
+    if (editor.parentElement) editor.parentElement.classList.remove('vim-normal');
+    if (vimBlockCursor) vimBlockCursor.hidden = true;
+  }
+}
+
+// 光标移动 / 滚动 / 点击时刷新方块光标位置
+editor.addEventListener('select', updateVimUI);
+editor.addEventListener('scroll', updateVimUI);
+editor.addEventListener('click', () => { if (isVimMode) updateVimUI(); });
+
+// 核心：键盘拦截与状态机（捕获阶段，优先于 Tab 缩进）
+function vimKeydown(e) {
+  if (!isVimMode) return;
+
+  // --- Insert 模式：仅 Esc / Ctrl+[ 退回 Normal，其余交给浏览器正常输入 ---
+  if (vimState === 'insert') {
+    if (e.key === 'Escape' || (e.key === '[' && e.ctrlKey)) {
+      e.preventDefault();
+      vimState = 'normal';
+      editor.selectionStart = editor.selectionEnd = Math.max(0, editor.selectionStart - 1); // 退回一格
+      updateVimUI();
+    }
+    return;
+  }
+
+  // --- Normal 模式 ---
+  if (e.metaKey || e.ctrlKey || e.altKey) return;            // 放行系统快捷键（Ctrl+S/C/V…）
+  if (e.key === 'Shift' || e.key === 'CapsLock') return;
+  e.preventDefault();
+  e.stopPropagation();                                       // 阻断 editor 的 Tab 缩进等冒泡处理
+
+  const val = editor.value;
+  let s = editor.selectionStart;
+
+  // 1. 双键组合（dd / yy / gg）
+  if (vimBuffer) {
+    if (vimBuffer === 'd' && e.key === 'd') {
+      const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+      let lineEnd = val.indexOf('\n', s);
+      if (lineEnd === -1) lineEnd = val.length; else lineEnd++;
+      const lineText = val.slice(lineStart, lineEnd);
+      editor.value = val.slice(0, lineStart) + val.slice(lineEnd);
+      editor.selectionStart = editor.selectionEnd = lineStart;
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(lineText).catch(() => {});
+      afterChange();
+    } else if (vimBuffer === 'y' && e.key === 'y') {
+      const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+      let lineEnd = val.indexOf('\n', s);
+      if (lineEnd === -1) lineEnd = val.length; else lineEnd++;
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(val.slice(lineStart, lineEnd)).catch(() => {});
+      toast('已复制当前行');
+    } else if (vimBuffer === 'g' && e.key === 'g') {
+      editor.selectionStart = editor.selectionEnd = 0;
+      editor.scrollTop = 0;
+    }
+    vimBuffer = '';
+    updateVimUI();
+    return;
+  }
+
+  // 2. 模式切换
+  if (e.key === 'i') {
+    vimState = 'insert';
+  } else if (e.key === 'a') {
+    editor.selectionStart = editor.selectionEnd = Math.min(val.length, s + 1);
+    vimState = 'insert';
+  } else if (e.key === 'A') {
+    let lineEnd = val.indexOf('\n', s);
+    if (lineEnd === -1) lineEnd = val.length;
+    editor.selectionStart = editor.selectionEnd = lineEnd;
+    vimState = 'insert';
+  } else if (e.key === 'I') {
+    const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+    editor.selectionStart = editor.selectionEnd = lineStart;
+    vimState = 'insert';
+  } else if (e.key === 'o') {
+    let lineEnd = val.indexOf('\n', s);
+    if (lineEnd === -1) lineEnd = val.length;
+    editor.value = val.slice(0, lineEnd) + '\n' + val.slice(lineEnd);
+    editor.selectionStart = editor.selectionEnd = lineEnd + 1;
+    vimState = 'insert';
+    afterChange();
+  } else if (e.key === 'O') {
+    const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+    editor.value = val.slice(0, lineStart) + '\n' + val.slice(lineStart);
+    editor.selectionStart = editor.selectionEnd = lineStart;
+    vimState = 'insert';
+    afterChange();
+  }
+
+  // 3. 光标移动 hjkl + 行列端点
+  else if (e.key === 'h') {
+    if (s > 0 && val[s - 1] !== '\n') editor.selectionStart = editor.selectionEnd = s - 1;
+  } else if (e.key === 'l') {
+    if (s < val.length && val[s] !== '\n') editor.selectionStart = editor.selectionEnd = s + 1;
+  } else if (e.key === 'j') {
+    const curLineStart = val.lastIndexOf('\n', s - 1) + 1;
+    const offset = s - curLineStart;
+    const nextLineStart = val.indexOf('\n', s);
+    if (nextLineStart !== -1) {
+      let nextLineEnd = val.indexOf('\n', nextLineStart + 1);   // 下一行结束（不含换行符）
+      if (nextLineEnd === -1) nextLineEnd = val.length;
+      // 钳制到下一行末字符（nextLineEnd-1），避免落到换行符上
+      editor.selectionStart = editor.selectionEnd = Math.min(nextLineStart + 1 + offset, nextLineEnd - 1);
+    }
+  } else if (e.key === 'k') {
+    const curLineStart = val.lastIndexOf('\n', s - 1) + 1;
+    const offset = s - curLineStart;
+    if (curLineStart > 0) {
+      const prevLineStart = val.lastIndexOf('\n', curLineStart - 2) + 1;
+      let prevLineEnd = val.indexOf('\n', prevLineStart);        // 上一行结束（不含换行符）
+      if (prevLineEnd === -1) prevLineEnd = val.length;
+      // 钳制到上一行末字符（prevLineEnd-1），避免落到换行符上
+      editor.selectionStart = editor.selectionEnd = Math.min(prevLineStart + offset, prevLineEnd - 1);
+    }
+  } else if (e.key === '0') {
+    editor.selectionStart = editor.selectionEnd = val.lastIndexOf('\n', s - 1) + 1;
+  } else if (e.key === '$') {
+    let lineEnd = val.indexOf('\n', s);
+    editor.selectionStart = editor.selectionEnd = lineEnd === -1 ? val.length : lineEnd;
+  } else if (e.key === 'G') {
+    editor.selectionStart = editor.selectionEnd = val.length;
+    editor.scrollTop = editor.scrollHeight;
+  }
+
+  // 4. 编辑与操作
+  else if (e.key === 'x') {
+    if (s < val.length && val[s] !== '\n') {
+      editor.value = val.slice(0, s) + val.slice(s + 1);
+      editor.selectionStart = editor.selectionEnd = s;
+      afterChange();
+    }
+  } else if (e.key === 'u') {
+    document.execCommand('undo');
+  } else if (e.key === 'p') {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then((clip) => {
+        if (!clip) return;
+        const v = editor.value;
+        editor.value = v.slice(0, s + 1) + clip + v.slice(s + 1);
+        editor.selectionStart = editor.selectionEnd = s + 1 + clip.length;
+        afterChange();
+      }).catch(() => {});
+    } else {
+      toast('当前环境不支持读取剪贴板');
+    }
+  } else if (e.key === 'd' || e.key === 'y' || e.key === 'g') {
+    vimBuffer = e.key;                       // 进入等待双键状态
+  }
+
+  // 移动后仅滚动（不重置光标列，公式取自 scrollEditorToLine 的滚动部分）
+  if (editor.selectionStart !== s) {
+    const ln = val.slice(0, editor.selectionStart).split('\n').length - 1;
+    const lh = parseFloat(getComputedStyle(editor).lineHeight) || 25;
+    editor.scrollTop = Math.max(0, ln * lh - editor.clientHeight / 3);
+  }
+  updateVimUI();
+}
+editor.addEventListener('keydown', vimKeydown, true);   // 捕获阶段：优先于 Tab 缩进
+
+// 初始化：依据 localStorage 还原开关状态与初始标签
+updateVimUI();

@@ -818,3 +818,32 @@ body.no-editor .editor-pane { display: none; }
 
 /* 全屏模式下文库入口隐藏（与工具栏一同隐藏），避免浮层遮挡 */
 body.fullscreen #btnLibrary { display: none; }
+
+/* ---------- Vim 模式 ---------- */
+.vim-status {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--accent-soft);
+  background: var(--bg-elev);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* Vim 的灵魂：Normal 模式下的半透明方块光标。
+   父级 .editor-wrap 为 position:relative，故本元素用 position:absolute 即可
+   与 editor.offsetLeft 共用同一参考系（见 app.js updateVimUI）。 */
+.vim-block-cursor {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: rgba(99, 102, 241, 0.4);   /* 主题色半透明 */
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  animation: vim-blink 1s step-end infinite;
+}
+@keyframes vim-blink { 50% { opacity: 0; } }
+
+/* Normal 模式隐藏原生光标（方块光标取而代之） */
+.editor-wrap.vim-normal #editor { caret-color: transparent; }
