@@ -1782,6 +1782,7 @@ menuWrap.addEventListener('click', (e) => {
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
   else if (act === 'publish-blog') publishToBlog();
+  else if (act === 'publish-podcast') publishToPodcast();
   else if (act === 'nas-upload') uploadToNas();
   else if (act === 'nas-download') nasDownloadAndOpen();
   else if (act === 'copytext') copyText();
@@ -1873,10 +1874,10 @@ function blogMdToPlain(markdown) {
     .trim();
 }
 
-async function blogPostJSON(url, json) {
+async function blogPostJSON(url, json, extraHeaders) {
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {}),
     body: JSON.stringify(json)
   });
   let data = {};
@@ -1920,6 +1921,47 @@ async function publishToBlog() {
   } catch (err) {
     toast('❌ 发布失败：' + (err.message || err), 'err', 5000);
     flash('发布失败');
+  }
+}
+
+// === SECTION: 一键转播客（POST /api/publish，逻辑提取自 Taio 直读脚本，改用浏览器 fetch） ===
+// 与「发布到博客」共用同一后端地址（BLOG_PUBLISH_URL）；区别在 targets=['nas'] + transform='read'，
+// 把内容送进 NAS 单人朗读队列，而非发布成文章。优先取编辑器选中文本，否则取整篇正文。
+async function publishToPodcast() {
+  // 1. 取内容：优先选中文本，否则整篇正文
+  let text = '';
+  if (editor.selectionStart !== editor.selectionEnd) {
+    text = editor.value.slice(editor.selectionStart, editor.selectionEnd).trim();
+  }
+  if (!text) text = (editor.value || '').trim();
+  if (!text) { flash('没有可转播的内容'); return; }
+
+  // 2. 自动提取第一行作为标题：[Read] <首行>
+  const firstLine = text.split('\n')[0].replace(/[#*>-]/g, '').trim();
+  const title = ('[Read] ' + firstLine).substring(0, 50);
+
+  flash('正在加入朗读队列…');
+  try {
+    const payload = {
+      title,
+      content: text,
+      content_md: text,
+      targets: ['nas'],
+      transform: 'read'
+    };
+    const result = await blogPostJSON(BLOG_PUBLISH_URL, payload, { 'X-App-ID': 'mdviewer-quick-read' });
+    const nas = result && result.nas;
+    if (nas && nas.status === 'success') {
+      toast('✅ 已加入 NAS 直读队列', 'ok');
+      flash('已加入朗读队列');
+    } else {
+      const msg = nas ? (nas.message || JSON.stringify(nas)) : JSON.stringify(result);
+      toast('❌ 转播客失败：' + msg, 'err', 5000);
+      flash('转播客失败');
+    }
+  } catch (err) {
+    toast('❌ 转播客失败：' + (err.message || err), 'err', 5000);
+    flash('转播客失败');
   }
 }
 
