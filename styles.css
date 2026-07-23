@@ -127,9 +127,22 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .menu [data-sub]::after { content: ''; }
 
 /* ---------- Workspace split ---------- */
-.workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+.workspace { flex: 1; display: flex; min-height: 0; flex-direction: row; }
+.workspace.swapped { flex-direction: row-reverse; }
 .editor-pane, .preview-pane { min-width: 0; min-height: 0; display: flex; }
-.editor-pane { border-right: 1px solid var(--border); }
+.editor-pane { flex: 0 0 var(--editor-w, 50%); }   /* 宽度由分隔线拖拽调整（--editor-w）*/
+.preview-pane { flex: 1 1 0; }
+/* 可拖拽分隔线：拖动调整编辑区 / 预览区大小 */
+.splitter {
+  flex: 0 0 6px; align-self: stretch; cursor: col-resize;
+  background: var(--border); position: relative; transition: background .15s;
+}
+.splitter::after {
+  content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 2px; height: 28px; border-radius: 2px; background: var(--text-dim); opacity: .45;
+}
+.splitter:hover, .splitter.dragging { background: var(--accent); }
+.splitter:hover::after, .splitter.dragging::after { opacity: 1; }
 .editor-wrap { flex: 1; display: flex; min-width: 0; position: relative; }
 
 /* 行号栏：font-size / line-height / padding-top 与 #editor 逐像素一致，保证对齐 */
@@ -150,10 +163,13 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .preview { padding: 20px 26px; flex: 1; min-width: 0; }
 
 /* ---------- View modes ---------- */
-body.no-preview .workspace { grid-template-columns: 1fr; }
+body.no-preview .workspace { flex-direction: row; }
 body.no-preview .preview-pane { display: none; }
-body.no-editor .workspace { grid-template-columns: 1fr; }
+body.no-preview .editor-pane { flex: 1 1 0; }
+body.no-editor .workspace { flex-direction: row; }
 body.no-editor .editor-pane { display: none; }
+body.no-editor .preview-pane { flex: 1 1 0; }
+body.no-preview .splitter, body.no-editor .splitter { display: none; }
 
 /* ---------- Statusbar ---------- */
 .statusbar {
@@ -432,9 +448,12 @@ body.no-editor .editor-pane { display: none; }
 
 /* ---------- Mobile ---------- */
 @media (max-width: 760px) {
-  .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .workspace { flex-direction: column; }
+  .editor-pane { flex: 1 1 0; }
+  .preview-pane { flex: 1 1 0; }
+  .splitter { display: none; }
   .editor-pane { border-right: 0; border-bottom: 1px solid var(--border); }
-  body.no-preview .workspace, body.no-editor .workspace { grid-template-rows: 1fr; }
+  body.no-preview .workspace, body.no-editor .workspace { flex-direction: column; }
   .toolbar { padding: 8px 10px; gap: 8px; }
   .brand { font-size: 14px; }
   .brand span { display: none; }

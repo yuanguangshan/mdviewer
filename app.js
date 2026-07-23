@@ -1724,6 +1724,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'mdtheme') applyMdTheme(btn.dataset.val);
   else if (act === 'vim') toggleVimMode();
   else if (act === 'share-r2') shareViaR2();
+  else if (act === 'layout-swap') toggleLayoutSwap();
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
@@ -2388,10 +2389,107 @@ async function initLibrary() {
   }
   loadDraft();     // 无文库上下文 → 加载草稿
 }
+
+/* ============================================================
+   布局：左右交换 + 可拖拽分隔线
+   - 交换：.workspace 加 .swapped（flex row-reverse）
+   - 拖拽：调整 --editor-w（编辑器面板 flex-basis），预览区自适应
+   - 偏好持久化到 localStorage，刷新后保留
+   ============================================================ */
+let isLayoutSwapped = localStorage.getItem('md-layout-swapped') === '1';
+let editorWidthPx = parseFloat(localStorage.getItem('md-editor-width')) || null;
+const menuLayoutToggle = $('#menuLayout');
+
+function applyLayout() {
+  const ws = document.querySelector('.workspace');
+  if (!ws) return;
+  ws.classList.toggle('swapped', isLayoutSwapped);
+  if (editorWidthPx && editorWidthPx > 0) ws.style.setProperty('--editor-w', editorWidthPx + 'px');
+  else ws.style.removeProperty('--editor-w');
+  if (menuLayoutToggle) menuLayoutToggle.textContent = '🔀 交换左右布局：' + (isLayoutSwapped ? '开' : '关');
+}
+
+function toggleLayoutSwap() {
+  isLayoutSwapped = !isLayoutSwapped;
+  localStorage.setItem('md-layout-swapped', isLayoutSwapped ? '1' : '0');
+  applyLayout();
+}
+
+function persistLayoutWidth() {
+  if (editorWidthPx != null) localStorage.setItem('md-editor-width', String(editorWidthPx));
+}
+
+function initSplitter() {
+  const ws = document.querySelector('.workspace');
+  const splitter = document.getElementById('splitter');
+  if (!ws || !splitter) return;
+  const MIN = 220;                 // 单块最小宽度（px）
+  let dragging = false;
+
+  const clampW = (w) => {
+    const rect = ws.getBoundingClientRect();
+    const sw = splitter.offsetWidth;
+    return Math.max(MIN, Math.min(w, rect.width - sw - MIN));
+  };
+  const setW = (w) => {
+    editorWidthPx = w;
+    ws.style.setProperty('--editor-w', w + 'px');
+  };
+  const pointX = (e) => (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+
+  const onDown = (e) => {
+    dragging = true;
+    splitter.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    if (e.cancelable) e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    const rect = ws.getBoundingClientRect();
+    const x = pointX(e);
+    const w = isLayoutSwapped ? (rect.right - x) : (x - rect.left);
+    setW(clampW(w));
+    if (e.cancelable) e.preventDefault();
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    persistLayoutWidth();
+  };
+
+  splitter.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  splitter.addEventListener('touchstart', onDown, { passive: false });
+  window.addEventListener('touchmove', onMove, { passive: false });
+  window.addEventListener('touchend', onUp);
+
+  // 键盘可达性：聚焦分隔线后用 ←/→ 微调，Home 复位 50%
+  splitter.addEventListener('keydown', (e) => {
+    const rect = ws.getBoundingClientRect();
+    const sw = splitter.offsetWidth;
+    const cur = editorWidthPx || (rect.width - sw) / 2;
+    let next = cur;
+    if (e.key === 'ArrowLeft') next = isLayoutSwapped ? cur + 24 : cur - 24;
+    else if (e.key === 'ArrowRight') next = isLayoutSwapped ? cur - 24 : cur + 24;
+    else if (e.key === 'Home') { setW((rect.width - sw) / 2); persistLayoutWidth(); e.preventDefault(); return; }
+    else return;
+    e.preventDefault();
+    setW(clampW(next));
+    persistLayoutWidth();
+  });
+}
+
 setSaveState('', '就绪');
 initLibrary();
 renderMarkdown();
 applyWrap();            // 设置换行模式（默认软换行）+ 渲染覆盖层
+applyLayout();          // 应用上次保存的左右布局与分隔宽度
+initSplitter();         // 启用编辑区 / 预览区分隔线拖拽
 applyMdTheme(mdThemeMode);
 updateStats();
 updateGutter();
