@@ -40,7 +40,7 @@
         <button id="btnOpen" class="btn icon" title="打开本地文件 (Ctrl+O)" aria-label="打开文件">📂</button>
         <button id="btnSave" class="btn primary" title="保存 / 另存为 (Ctrl+S)" aria-label="保存">💾<span class="t"> 保存</span></button>
         <span class="sep"></span>
-        <button id="btnView" class="btn view" title="切换视图：双栏 / 编辑 / 预览" aria-label="切换视图">分屏</button>
+        <button id="btnView" class="btn view" title="切换视图：双栏 / 编辑 / 预览 (Ctrl+Alt+V)" aria-label="切换视图">分屏</button>
         <span class="stat" id="stat" title="字数 · 预计阅读时间">0 字</span>
         <div class="menu-wrap">
           <button id="btnMore" class="btn icon" title="更多操作" aria-label="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>
@@ -52,6 +52,7 @@
             <button role="menuitem" data-act="copytext">📋 复制文本</button>
             <button role="menuitem" data-act="copymd">📋 复制 Markdown</button>
             <button role="menuitem" data-act="copy">📋 复制 HTML</button>
+            <button role="menuitem" data-sub="format" aria-haspopup="true" aria-expanded="false">🅰️ 格式 ▸</button>
             <div class="menu-sep"></div>
             <button role="menuitem" data-act="md">💾 导出 Markdown</button>
             <button role="menuitem" data-act="html">📄 导出 HTML</button>
@@ -87,6 +88,25 @@
             <button role="menuitem" data-action="toLowerCase">🔡 转小写</button>
           </div>
 
+          <!-- 二级菜单：格式 -->
+          <div class="menu sub" id="sub-format" role="menu" aria-label="格式" hidden>
+            <button role="menuitem" data-action="fmtBold">🅱 加粗</button>
+            <button role="menuitem" data-action="fmtItalic">🇮 斜体</button>
+            <button role="menuitem" data-action="fmtCode">⌨️ 行内代码</button>
+            <button role="menuitem" data-action="fmtLink">🔗 链接</button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-action="fmtQuote">❝ 引用</button>
+            <button role="menuitem" data-action="fmtUl">• 无序列表</button>
+            <button role="menuitem" data-action="fmtOl">1. 有序列表</button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" data-action="fmtH1">H1 一级标题</button>
+            <button role="menuitem" data-action="fmtH2">H2 二级标题</button>
+            <button role="menuitem" data-action="fmtH3">H3 三级标题</button>
+            <button role="menuitem" data-action="fmtH4">H4 四级标题</button>
+            <button role="menuitem" data-action="fmtH5">H5 五级标题</button>
+            <button role="menuitem" data-action="fmtH6">H6 六级标题</button>
+          </div>
+
           <!-- 二级菜单：AI 智能助理 -->
           <div class="menu sub" id="sub-ai" role="menu" aria-label="AI 智能助理" hidden>
             <button role="menuitem" data-action="aiSummary">📝 全文总结摘要</button>
@@ -120,7 +140,7 @@
       <span id="posInfo">行 1，列 1</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v2.0.2</span>
+      <span class="version">v2.0.3</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>

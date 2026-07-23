@@ -934,6 +934,59 @@ const TEXT_ACTIONS = {
   }
 };
 
+/* ---------- 选区包裹 / 行前缀（格式化快捷键的底层原语）----------
+   wrapSelection：用 before/after 包裹当前选区；无选区则插入占位文字并把光标落在内部。
+   prefixLines：对选区所跨的整行逐行施加变换（引用 / 列表 / 标题用）。
+   两者都触发 input 事件，从而走 afterChange（渲染 / 统计 / 草稿 / 文库回写）。 */
+function wrapSelection(before, after, placeholder) {
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e) || placeholder || '';
+  const insert = before + sel + after;
+  editor.value = editor.value.slice(0, s) + insert + editor.value.slice(e);
+  const ns = s + before.length;
+  editor.selectionStart = ns;
+  editor.selectionEnd = ns + sel.length;
+  editor.focus();
+  editor.dispatchEvent(new Event('input'));
+}
+function prefixLines(fn) {
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const v = editor.value;
+  let ls = v.lastIndexOf('\n', s - 1) + 1;
+  let le = v.indexOf('\n', e); if (le === -1) le = v.length;
+  const block = v.slice(ls, le);
+  const out = block.split('\n').map((ln, i) => fn(ln, i)).join('\n');
+  editor.value = v.slice(0, ls) + out + v.slice(le);
+  editor.selectionStart = ls;
+  editor.selectionEnd = ls + out.length;
+  editor.focus();
+  editor.dispatchEvent(new Event('input'));
+}
+function setHeading(level) {
+  const hashes = '#'.repeat(level) + ' ';
+  prefixLines((ln) => {
+    const stripped = ln.replace(/^#{1,6}\s+/, '');
+    return stripped ? hashes + stripped : '#'.repeat(level);
+  });
+}
+
+/* 格式化动作：与 TEXT_ACTIONS / AI_ACTIONS 同级，供「格式」子菜单与快捷键共用 */
+const FORMAT_ACTIONS = {
+  fmtBold:   () => wrapSelection('**', '**', '粗体'),
+  fmtItalic: () => wrapSelection('*', '*', '斜体'),
+  fmtCode:   () => wrapSelection('`', '`', '代码'),
+  fmtLink:   () => wrapSelection('[', '](https://)', '链接文字'),
+  fmtQuote:  () => prefixLines((ln) => ln ? '> ' + ln : '>'),
+  fmtUl:     () => prefixLines((ln) => ln ? '- ' + ln : '-'),
+  fmtOl:     () => prefixLines((ln, i) => ln ? (i + 1) + '. ' + ln : '1. '),
+  fmtH1: () => setHeading(1),
+  fmtH2: () => setHeading(2),
+  fmtH3: () => setHeading(3),
+  fmtH4: () => setHeading(4),
+  fmtH5: () => setHeading(5),
+  fmtH6: () => setHeading(6),
+};
+
 /* ---------- AI 智能助理（BYOK：自带 Key，纯前端直连，零后端） ----------
    设计：Key / endpoint / model 仅存本机 localStorage('md-ai-config')，绝不上传。
    通过浏览器 fetch 直连兼容 OpenAI 格式的 /chat/completions 接口（OpenAI / DeepSeek / 中转 / 本地）。
@@ -1587,7 +1640,7 @@ menuWrap.addEventListener('click', (e) => {
   const macro = btn.dataset.action;
   if (macro) {
     openMoreMenu(false);
-    const fn = TEXT_ACTIONS[macro] || AI_ACTIONS[macro];
+    const fn = TEXT_ACTIONS[macro] || AI_ACTIONS[macro] || (FORMAT_ACTIONS && FORMAT_ACTIONS[macro]);
     if (fn) fn();
     return;
   }
@@ -1691,12 +1744,41 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-/* ---------- 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"）---------- */
+/* ---------- 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"）----------
+   mod = Ctrl(Linux/Win) 或 ⌘(macOS)；alt = Alt / ⌥；shift = Shift / ⇧
+   新增快捷键：在 SHORTCUTS 追加一行 + 在 ACTION_HINTS 登记对应菜单项即可，
+   菜单会自动显示快捷键提示，无需改动分发逻辑。 */
 const SHORTCUTS = new Map([
+  // 文件 / 文档
   ['mod+s', saveFile],
   ['mod+o', openFile],
   ['mod+alt+n', () => { const b = $('#btnNew'); if (b) b.click(); }],
-  // 后续新增快捷键只需在此追加一行，无需改动分发逻辑
+  ['mod+shift+r', renameFile],
+  ['f2', renameFile],
+  ['mod+shift+l', addToLibrary],
+  ['mod+shift+e', exportMarkdown],
+  ['mod+p', exportPDF],
+  ['mod+shift+m', copyMarkdown],
+  ['mod+shift+c', copyHTML],
+  ['mod+shift+y', copyText],
+  ['mod+shift+w', () => { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }],
+  ['mod+shift+t', () => applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3])],
+  ['mod+f', () => TEXT_ACTIONS.searchReplace()],
+  ['mod+alt+v', nextView],
+  // 格式
+  ['mod+b', () => FORMAT_ACTIONS.fmtBold()],
+  ['mod+i', () => FORMAT_ACTIONS.fmtItalic()],
+  ['mod+e', () => FORMAT_ACTIONS.fmtCode()],
+  ['mod+k', () => FORMAT_ACTIONS.fmtLink()],
+  ['mod+shift+q', () => FORMAT_ACTIONS.fmtQuote()],
+  ['mod+shift+u', () => FORMAT_ACTIONS.fmtUl()],
+  ['mod+shift+o', () => FORMAT_ACTIONS.fmtOl()],
+  ['mod+1', () => FORMAT_ACTIONS.fmtH1()],
+  ['mod+2', () => FORMAT_ACTIONS.fmtH2()],
+  ['mod+3', () => FORMAT_ACTIONS.fmtH3()],
+  ['mod+4', () => FORMAT_ACTIONS.fmtH4()],
+  ['mod+5', () => FORMAT_ACTIONS.fmtH5()],
+  ['mod+6', () => FORMAT_ACTIONS.fmtH6()],
 ]);
 document.addEventListener('keydown', (e) => {
   const parts = [];
@@ -1709,6 +1791,40 @@ document.addEventListener('keydown', (e) => {
   const handler = SHORTCUTS.get(parts.join('+'));
   if (handler) { e.preventDefault(); handler(); }
 });
+
+/* ---------- 菜单快捷键提示（自动渲染，无需手写每处）---------- */
+/* 菜单项（data-act / data-action）→ 归一化组合键；与 SHORTCUTS 的 key 一致 */
+const ACTION_HINTS = {
+  rename: 'mod+shift+r', addtolib: 'mod+shift+l',
+  copytext: 'mod+shift+y', copymd: 'mod+shift+m', copy: 'mod+shift+c',
+  md: 'mod+shift+e', pdf: 'mod+p', wrap: 'mod+shift+w', theme: 'mod+shift+t',
+  searchReplace: 'mod+f',
+  fmtBold: 'mod+b', fmtItalic: 'mod+i', fmtCode: 'mod+e', fmtLink: 'mod+k',
+  fmtQuote: 'mod+shift+q', fmtUl: 'mod+shift+u', fmtOl: 'mod+shift+o',
+  fmtH1: 'mod+1', fmtH2: 'mod+2', fmtH3: 'mod+3',
+  fmtH4: 'mod+4', fmtH5: 'mod+5', fmtH6: 'mod+6',
+};
+
+/* 组合键 → 用户可读标签（区分 macOS / 其它平台） */
+function formatCombo(combo) {
+  const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || '') ||
+    /mac/i.test(navigator.userAgent || '');
+  const map = isMac ? { mod: '⌘', alt: '⌥', shift: '⇧' } : { mod: 'Ctrl', alt: 'Alt', shift: 'Shift' };
+  return combo.split('+').map((p) => map[p] || (p.length === 1 ? p.toUpperCase() : p)).join(isMac ? '' : '+');
+}
+
+/* 在「⋯」菜单（含全部二级子菜单）中渲染快捷键提示 */
+function renderShortcutHints() {
+  document.querySelectorAll('.menu-wrap [data-act], .menu-wrap [data-action]').forEach((btn) => {
+    const key = btn.dataset.act || btn.dataset.action;
+    const combo = ACTION_HINTS[key];
+    if (!combo || btn.querySelector('.kbd')) return;   // 无快捷键 / 已渲染 → 跳过（幂等）
+    const span = document.createElement('span');
+    span.className = 'kbd';
+    span.textContent = formatCombo(combo);
+    btn.appendChild(span);
+  });
+}
 
 /* ---------- 注册 Service Worker（PWA 离线 / 可安装）---------- */
 if ('serviceWorker' in navigator) {
@@ -2120,6 +2236,7 @@ applyMdTheme(mdThemeMode);
 updateStats();
 updateGutter();
 updatePos();
+renderShortcutHints();   // 在「⋯」菜单渲染快捷键提示
 
 // 文库静默增量同步调度：联网即补传、定时兜底、持久化存储防清理
 window.addEventListener('online', () => syncLibraryToNas());
