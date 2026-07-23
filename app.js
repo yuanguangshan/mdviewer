@@ -1725,6 +1725,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'vim') toggleVimMode();
   else if (act === 'share-r2') shareViaR2();
   else if (act === 'layout-swap') toggleLayoutSwap();
+  else if (act === 'layout-reset') resetLayout();
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
@@ -2440,6 +2441,17 @@ function applyLayout() {
 function toggleLayoutSwap() {
   isLayoutSwapped = !isLayoutSwapped;
   localStorage.setItem('md-layout-swapped', isLayoutSwapped ? '1' : '0');
+  applyLayout();
+}
+
+// 一键恢复默认布局：编辑区在左、预览区在右、各占 50%，并清除持久化
+function resetLayout() {
+  isLayoutSwapped = false;
+  editorWidthPx = null;
+  try {
+    localStorage.removeItem('md-layout-swapped');
+    localStorage.removeItem('md-editor-width');
+  } catch (_) {}
   applyLayout();
 }
 
