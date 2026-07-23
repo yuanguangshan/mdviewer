@@ -171,6 +171,28 @@ body.no-editor .editor-pane { display: none; }
 body.no-editor .preview-pane { flex: 1 1 0; }
 body.no-preview .splitter, body.no-editor .splitter { display: none; }
 
+/* ---------- 新版本提示条（SW 更新时弹出）---------- */
+.update-banner {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  z-index: 60; display: flex; align-items: center; gap: 12px;
+  max-width: calc(100vw - 32px); padding: 10px 14px;
+  background: var(--accent); color: #fff; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.28); font-size: 13px;
+}
+.update-banner[hidden] { display: none; }
+.update-banner .update-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-banner .update-reload {
+  flex: 0 0 auto; border: 0; border-radius: 6px; cursor: pointer;
+  padding: 5px 12px; font-size: 13px; font-weight: 600;
+  background: rgba(255,255,255,.92); color: var(--accent);
+}
+.update-banner .update-reload:hover { background: #fff; }
+.update-banner .update-dismiss {
+  flex: 0 0 auto; border: 0; background: transparent; color: rgba(255,255,255,.85);
+  cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px;
+}
+.update-banner .update-dismiss:hover { color: #fff; }
+
 /* ---------- Statusbar ---------- */
 .statusbar {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;

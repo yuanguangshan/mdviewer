@@ -1892,10 +1892,38 @@ function renderShortcutHints() {
 }
 
 /* ---------- 注册 Service Worker（PWA 离线 / 可安装）---------- */
+/* 部署后新版本提示：检测到新 SW 安装完成（且当前有旧 SW 在控制页面）时，
+   弹出非阻塞提示条，用户点击「立即刷新」即应用新版本，无需反复手动硬刷。 */
 if ('serviceWorker' in navigator) {
+  const updateBanner = document.getElementById('updateBanner');
+  const showUpdateBanner = () => { if (updateBanner) updateBanner.hidden = false; };
+  const hideUpdateBanner = () => { if (updateBanner) updateBanner.hidden = true; };
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js').then((reg) => {
+      // 常规更新检查触发的「发现新版本」
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          // installed 且存在旧 SW 控制页面 → 说明有可用更新
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBanner();
+          }
+        });
+      });
+      // 若注册时已有等待中的 SW（上次部署遗留），直接提示
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner();
+    }).catch(() => {});
   });
+
+  // 用户点击「立即刷新」→ 重新加载本页。因 sw.js 安装时已 skipWaiting + clients.claim，
+  // 新 SW 已就绪，reload 后即为新版本（含最新 app.js / index.html）。
+  const doUpdate = () => { location.reload(); };
+  const rb = document.getElementById('updateReloadBtn');
+  const db = document.getElementById('updateDismissBtn');
+  if (rb) rb.addEventListener('click', doUpdate);
+  if (db) db.addEventListener('click', hideUpdateBanner);
 }
 
 /* ---------- 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ---------- */
