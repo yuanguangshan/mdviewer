@@ -227,6 +227,11 @@ body.no-editor .editor-pane { display: none; }
 [data-theme="light"] .floating-toolbar button { color: var(--text); }
 [data-theme="light"] .floating-toolbar button:hover { background: rgba(0,0,0,.07); }
 [data-theme="light"] .floating-toolbar::after { background: rgba(255,255,255,.82); border-color: var(--border); }
+/* 格式刷浮层：内部分隔线 + AI 按钮高亮 */
+.floating-toolbar .fb-sep { width: 1px; align-self: stretch; margin: 4px 3px; background: rgba(255,255,255,.18); }
+.floating-toolbar .fb-ai { color: #ffd479; }
+[data-theme="light"] .floating-toolbar .fb-sep { background: rgba(0,0,0,.14); }
+[data-theme="light"] .floating-toolbar .fb-ai { color: #b8860b; }
 .toast.toast-info { border-color: var(--accent-soft); }
 
 /* ---------- AI 流式打字机浮层 ---------- */

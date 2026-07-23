@@ -19,6 +19,11 @@ if (!document.querySelector('#btnMore')) {
 let currentFileHandle = null;   // FileSystemFileHandle（支持时用于原地保存）
 let currentName = '未命名.md';
 let currentNameIsAuto = false;   // 当前标题是否由「首行自动派生」而来（手动改名/打开文件则置 false）
+let currentShareId = null;       // 当前协作分享的 R2 文件名（null = 非协作文档）
+// Cloudflare Worker 公开域名（仅公开端点，不含任何密钥/凭据）。
+// 注意：若该域名已被 R2 存储桶的「公开访问/自定义域」占用，请给 Worker 单独分配子域
+//（如 share-api.want.biz）并在此修改，否则 DNS/CNAME 会冲突导致两者都不可用。
+const R2_WORKER_URL = 'https://share.want.biz';
 
 /* ---------- 小工具 ---------- */
 function debounce(fn, ms) {
@@ -1346,9 +1351,36 @@ function hideAiToolbar() {
   if (aiToolbar) aiToolbar.hidden = true;
 }
 
-// 划词 / 键盘选择后浮出（用 setTimeout 等浏览器先把选区定好）
-editor.addEventListener('mouseup', () => setTimeout(showAiToolbar, 0));
-editor.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') showAiToolbar(); });
+/* ---------- 格式刷：选中文字浮出的 WPS 风格工具条 ---------- */
+const formatBrush = $('#formatBrush');
+let fmtSel = null;            // 记录当前选区，供按钮点击后还原
+
+function showFormatBrush() {
+  if (!formatBrush) return;
+  // Vim Normal 模式下由 Vim 接管选区，不弹格式刷
+  if (isVimMode && vimState === 'normal') { hideFormatBrush(); return; }
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  if (s === e) { hideFormatBrush(); return; }   // 无选区则隐藏
+  fmtSel = { start: s, end: e };
+  const pos = getTextareaCaretPos(editor, e);   // 选区末端坐标（内容坐标）
+  const rect = editor.getBoundingClientRect();
+  const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
+  const y = rect.top + pos.top - editor.scrollTop;
+  formatBrush.hidden = false;
+  const tw = formatBrush.offsetWidth, th = formatBrush.offsetHeight;
+  const left = Math.max(tw / 2 + 6, Math.min(x, window.innerWidth - tw / 2 - 6));
+  formatBrush.style.left = left + 'px';
+  formatBrush.style.top = y + 'px';
+  const placeBelow = (y - th - 12) < 0;
+  formatBrush.style.transform = placeBelow
+    ? 'translate(-50%, 12px)'
+    : 'translate(-50%, calc(-100% - 12px))';
+}
+function hideFormatBrush() { if (formatBrush) formatBrush.hidden = true; }
+
+// 划词 / 键盘选择后浮出格式刷（用 setTimeout 等浏览器先把选区定好）
+editor.addEventListener('mouseup', () => setTimeout(showFormatBrush, 0));
+editor.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') showFormatBrush(); });
 
 // 点工具条按钮：先还原选区，再触发对应 AI 动作
 if (aiToolbar) {
@@ -1364,12 +1396,33 @@ if (aiToolbar) {
   });
 }
 
+// 点格式刷按钮：还原选区 → 套用对应格式（AI 按钮则展开 AI 浮层）
+if (formatBrush) {
+  formatBrush.addEventListener('mousedown', (e) => e.preventDefault()); // 防止抢焦点导致选区丢失
+  formatBrush.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-fmt]');
+    if (!btn) return;
+    const fmt = btn.dataset.fmt;
+    if (fmt === 'ai') {            // 展开 AI 智能助理浮层
+      hideFormatBrush();
+      editor.focus();
+      showAiToolbar();
+      return;
+    }
+    hideFormatBrush();
+    editor.focus();
+    editor.setSelectionRange(fmtSel.start, fmtSel.end);
+    if (FORMAT_ACTIONS && FORMAT_ACTIONS[fmt]) FORMAT_ACTIONS[fmt]();
+  });
+}
+
 // 选区外点击 / 滚动 / Esc 时收起
 document.addEventListener('mousedown', (ev) => {
   if (aiToolbar && !aiToolbar.hidden && !aiToolbar.contains(ev.target)) hideAiToolbar();
+  if (formatBrush && !formatBrush.hidden && !formatBrush.contains(ev.target)) hideFormatBrush();
 });
-window.addEventListener('scroll', hideAiToolbar, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideAiToolbar(); });
+window.addEventListener('scroll', () => { hideAiToolbar(); hideFormatBrush(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideAiToolbar(); hideFormatBrush(); } });
 
 
 /* ---------- NAS 同步：上传 / 下载 ----------
@@ -1661,6 +1714,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'theme') applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]);
   else if (act === 'mdtheme') applyMdTheme(btn.dataset.val);
   else if (act === 'vim') toggleVimMode();
+  else if (act === 'share-r2') shareViaR2();
 });
 
 /* 打印时临时切亮色，避免暗色配色的代码在白底 PDF 上看不清 */
@@ -2213,7 +2267,66 @@ async function showHistoryModal(docId) {
 }
 
 /* ---------- 初始化 ---------- */
+/* ---------- 微信协作分享：基于 Cloudflare R2 + Worker 的中转站 ----------
+   前端仅持有 Worker 的【公开端点】URL；R2 凭据写在 Cloudflare Worker 的绑定里，
+   绝不下发到前端、不入 git（符合“密钥永不写进会被提交代码”的原则）。
+   链接即密码：Worker 用随机短码做 key，无法被猜到。 */
+async function shareViaR2() {
+  if (!R2_WORKER_URL) { flash('未配置分享服务地址'); return; }
+  if (!editor.value.trim()) { flash('文档为空，无法分享'); return; }
+  toast(currentShareId ? '正在更新协作文档…' : '正在生成协作链接…', 'info');
+  const url = currentShareId ? `${R2_WORKER_URL}/${encodeURIComponent(currentShareId)}` : R2_WORKER_URL;
+  const method = currentShareId ? 'PUT' : 'POST';
+  try {
+    const resp = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'text/markdown;charset=utf-8' },
+      body: new Blob([editor.value], { type: 'text/markdown' })
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const resData = await resp.json();
+    currentShareId = resData.id;
+    const shareUrl = `${location.origin}${location.pathname}?share_r2=${encodeURIComponent(currentShareId)}`;
+    const text = `【协作】点击链接即可在微信内直接编辑：\n${shareUrl}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('✅ 协作链接已复制！去微信粘贴发给好友', 'ok', 5000);
+    } catch (_) {
+      // 非安全上下文（file:// 等）剪贴板不可用 → 弹窗让用户手动复制
+      prompt('复制此协作链接发给好友：', shareUrl);
+      toast('已生成协作链接（请手动复制）', 'ok', 5000);
+    }
+  } catch (e) {
+    toast('❌ 生成协作链接失败：' + (e.message || e), 'err', 5000);
+  }
+}
+
 async function initLibrary() {
+  // === 协作分享入口：命中 ?share_r2=xxx.md 时从 R2 拉取并进入协作模式 ===
+  try {
+    const shareId = new URLSearchParams(window.location.search).get('share_r2');
+    if (shareId) {
+      toast('正在加载协作文档…', 'info');
+      const resp = await fetch(`${R2_WORKER_URL}/${encodeURIComponent(shareId)}`);
+      if (resp.ok) {
+        editor.value = await resp.text();
+        currentLibId = null;
+        currentShareId = shareId;
+        currentName = '协作文档_' + shareId;
+        currentNameIsAuto = false;
+        updateFileName();
+        afterChange({ skipWriteback: true });
+        const cleanUrl = location.protocol + '//' + location.host + location.pathname;
+        history.replaceState({ path: cleanUrl }, '', cleanUrl);
+        toast('📥 已载入，修改后点「生成协作链接」即可覆盖发回', 'ok', 5000);
+        return;
+      }
+      toast('❌ 协作文档加载失败（不存在或已失效）', 'err');
+    }
+  } catch (e) {
+    toast('❌ 协作文档加载失败：' + (e.message || e), 'err');
+  }
+
   try {
     await openLibDb();
   } catch (e) {
