@@ -18,6 +18,7 @@ if (!document.querySelector('#btnMore')) {
 
 let currentFileHandle = null;   // FileSystemFileHandle（支持时用于原地保存）
 let currentName = '未命名.md';
+let currentNameIsAuto = false;   // 当前标题是否由「首行自动派生」而来（手动改名/打开文件则置 false）
 
 /* ---------- 小工具 ---------- */
 function debounce(fn, ms) {
@@ -515,7 +516,7 @@ function loadDraft() {
   const draft = localStorage.getItem('md-draft');
   if (draft !== null) editor.value = draft;
   const name = localStorage.getItem('md-name');
-  if (name) currentName = name;
+  if (name) { currentName = name; currentNameIsAuto = false; }
   updateFileName();
 }
 function afterChange(opts) {
@@ -541,6 +542,7 @@ async function openFile() {
       currentFileHandle = handle;
       const file = await handle.getFile();
       currentName = file.name;
+      currentNameIsAuto = false;
       currentLibId = null;                       // 打开本地文件 → 脱离文库上下文
       localStorage.removeItem('md-lib-current');
       editor.value = await file.text();
@@ -561,6 +563,7 @@ fileInput.addEventListener('change', (e) => {
   reader.onload = () => {
     editor.value = reader.result;
     currentName = f.name;
+    currentNameIsAuto = false;
     currentLibId = null;                       // 导入本地文件 → 脱离文库上下文
     localStorage.removeItem('md-lib-current');
     updateFileName();
@@ -604,6 +607,7 @@ async function saveFile() {
       await w.write(content);
       await w.close();
       currentName = handle.name;
+      currentNameIsAuto = false;
       updateFileName();
       flash('已保存 ' + currentName);
       return;
@@ -645,21 +649,42 @@ function deriveTitleFromContent() {
   return name;
 }
 
-/* 文档无名（未命名）时，从正文首行派生标题；派生成功后返回 true */
+/* 文库列表项标题同步（当前文库文档） */
+function syncLibName() {
+  if (!currentLibId || !libList) return;
+  const nameEl = libList.querySelector('.lib-item.active .lib-item-name');
+  if (nameEl) nameEl.textContent = currentName;
+}
+/* 标题命名：
+   - 文档无名（未命名）：按首行派生，并标记为「自动派生」
+   - 已命名且为自动派生：跟踪首行变化，首行改了则同步更新标题
+   返回是否发生了改名 */
 function ensureNameFromContent() {
   const isUnnamed = !currentName || currentName === '未命名.md' ||
                     /^未命名(\.\w+)?$/i.test(currentName);
-  if (!isUnnamed) return false;
-  const derived = deriveTitleFromContent();
-  if (!derived) return false;
-  const ext = /\.\w+$/.test(currentName) ? currentName.slice(currentName.lastIndexOf('.')) : '.md';
-  currentName = derived + ext;
-  updateFileName();
-  if (currentLibId) {                        // 文库文档：同步列表项标题
-    const nameEl = libList.querySelector('.lib-item.active .lib-item-name');
-    if (nameEl) nameEl.textContent = currentName;
+  if (isUnnamed) {
+    const derived = deriveTitleFromContent();
+    if (!derived) return false;
+    const ext = /\.\w+$/.test(currentName) ? currentName.slice(currentName.lastIndexOf('.')) : '.md';
+    currentName = derived + ext;
+    currentNameIsAuto = true;
+    updateFileName();
+    syncLibName();
+    return true;
   }
-  return true;
+  if (currentNameIsAuto) {                    // 已命名且为自动派生：跟踪首行
+    const derived = deriveTitleFromContent();
+    if (!derived) return false;
+    const ext = /\.\w+$/.test(currentName) ? currentName.slice(currentName.lastIndexOf('.')) : '.md';
+    const newName = derived + ext;
+    if (newName !== currentName) {
+      currentName = newName;
+      updateFileName();
+      syncLibName();
+      return true;
+    }
+  }
+  return false;
 }
 
 /* ---------- 新建 / 重命名 ---------- */
@@ -683,6 +708,7 @@ $('#btnNew').addEventListener('click', async () => {
   }
   currentFileHandle = null;
   currentName = '未命名.md';
+  currentNameIsAuto = false;
   updateFileName();
   afterChange();
 });
@@ -690,6 +716,7 @@ function renameFile() {
   const n = prompt('文件名：', currentName);
   if (n && n.trim()) {
     currentName = n.trim();
+    currentNameIsAuto = false;
     updateFileName();
     saveDraft();
     if (currentLibId) writebackLib();   // 文库文档：同步新文件名
@@ -1432,6 +1459,7 @@ async function nasOpen(input) {
   if (text == null) return;
   currentLibId = null;                 // 脱离文库上下文，作为独立草稿
   currentName = filename;
+  currentNameIsAuto = false;
   editor.value = text;
   updateFileName();
   afterChange();
@@ -1883,6 +1911,7 @@ function openLibDocData(doc) {
   currentLibId = doc.id;
   currentFileHandle = null;
   currentName = doc.name || '未命名.md';
+  currentNameIsAuto = !!doc.autoName;
   editor.value = doc.content || '';
   localStorage.setItem('md-lib-current', doc.id);
   updateFileName();
@@ -1936,7 +1965,7 @@ async function renameLibDoc(id) {
   doc.name = n.trim();
   doc.updatedAt = Date.now();
   try { await idbPut(doc); } catch (_) {}
-  if (id === currentLibId) { currentName = doc.name; updateFileName(); }
+  if (id === currentLibId) { currentName = doc.name; currentNameIsAuto = false; updateFileName(); }
   renderLibrary();
   flash('已重命名');
 }
@@ -1949,6 +1978,7 @@ async function deleteLibDoc(id) {
     localStorage.removeItem('md-lib-current');
     currentFileHandle = null;
     currentName = '未命名.md';
+    currentNameIsAuto = false;
     editor.value = '';
     localStorage.removeItem('md-draft');   // 清掉旧草稿，避免删除后内容在重载时复活
     localStorage.removeItem('md-name');
@@ -1963,7 +1993,7 @@ async function deleteLibDoc(id) {
 /* 当前文档转存到文库（如从电脑打开的文章） */
 async function addToLibrary() {
   if (currentLibId) { flash('当前已在文档库'); return; }
-  const doc = { id: genId(), name: currentName || '未命名.md', content: editor.value, updatedAt: Date.now() };
+  const doc = { id: genId(), name: currentName || '未命名.md', content: editor.value, updatedAt: Date.now(), autoName: currentNameIsAuto };
   try {
     await idbPut(doc);
     currentLibId = doc.id;                                 // 之后编辑自动回写文库
@@ -2017,7 +2047,7 @@ function writebackLib() {
     const history = (oldDoc && oldDoc.history) || [];
     // 内容未变：仅更新时间戳，不记快照（避免空转刷屏历史）
     if (oldDoc && oldDoc.content === newContent) {
-      return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history });
+      return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
     }
     history.push({
       at: Date.now(),
@@ -2025,7 +2055,7 @@ function writebackLib() {
       content: newContent,
     });
     if (history.length > MAX_HISTORY) history.shift();   // 只留最近 20 条
-    return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history });
+    return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
   }).then(() => {
     setSaveState('saved', '✓ 已存文库');
     const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
@@ -2052,6 +2082,7 @@ async function showHistoryModal(docId) {
 
   editor.value = target.content;
   currentName = doc.name;
+  currentNameIsAuto = false;
   currentLibId = docId;
   currentFileHandle = null;
   updateFileName();
