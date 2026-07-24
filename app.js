@@ -322,8 +322,9 @@ function scrollEditorToLine(line) {
   const lines = editor.value.split('\n');
   let pos = 0;
   for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
-  const lh = parseFloat(getComputedStyle(editor).lineHeight) || 25;
   if (viewMode !== 'preview') {
+    // lh 仅此处需要；放在分支内，避免预览模式下 getComputedStyle 触发 reflow、打断 tocJumpTo 的 smooth 滚动
+    const lh = parseFloat(getComputedStyle(editor).lineHeight) || 25;
     editor.scrollTop = Math.max(0, line * lh - editor.clientHeight / 3);
     syncHighlightScroll();
   }
@@ -341,7 +342,7 @@ function onPreviewAnchorClick(e) {
   const slug = decodeURIComponent(href.slice(1));   // 中文标题 hash 会被百分号编码，解码后才能匹配中文 id
   const heading = preview.getElementById(slug);
   if (!heading) return;
-  anchorNavLock = Date.now() + 450;   // 避免与比例同步滚动互相打架
+  anchorNavLock = Date.now() + 800;   // 跳转锁：期间暂停比例同步 + scroll-spy（后者读 getBoundingClientRect 会 reflow 打断 smooth）
   // 显式滚动预览区到标题（复用目录抽屉 tocJumpTo 的可靠逻辑，不再依赖浏览器默认行为）
   const delta = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top;
   previewPane.scrollBy({ top: delta, behavior: 'smooth' });
@@ -411,7 +412,7 @@ function tocJumpTo(slug) {
   try { heading = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(slug)); } catch (_) {}
   if (!heading) heading = preview.getElementById(slug);
   if (!heading) return;
-  anchorNavLock = Date.now() + 450;   // 暂停比例同步滚动，避免和跳转互相拉扯
+  anchorNavLock = Date.now() + 800;   // 跳转锁：期间暂停比例同步 + scroll-spy（后者读 getBoundingClientRect 会 reflow 打断 smooth）
   // 直接驱动预览区滚动容器：scrollIntoView 会遍历整条滚动祖先链，而本应用 body 为
   // overflow:hidden，纯预览（全宽）下它偶发判定失败、完全不滚 preview-pane。
   // 改用「标题相对预览区顶部的偏移」+ scrollBy，明确只滚 preview-pane，三视图皆稳。
@@ -659,6 +660,7 @@ previewPane.addEventListener('scroll', () => syncScroll(previewPane, editor));
 // 目录 scroll-spy：rAF 节流，仅目录打开时计算当前章节
 previewPane.addEventListener('scroll', () => {
   if (!tocOpen) return;
+  if (Date.now() < anchorNavLock) return;   // 跳转期间暂停：updateTocActive 读 getBoundingClientRect 会强制 reflow，取消进行中的 smooth 滚动，导致跳转停在半路
   cancelAnimationFrame(tocSpyRaf);
   tocSpyRaf = requestAnimationFrame(updateTocActive);
 });
