@@ -1618,12 +1618,24 @@ function getTextareaCaretPos(el, position) {
   return coords;
 }
 
+// 缓存 getTextareaCaretPos 的昂贵结果：大文档每次选区变化都要把文档前缀整段复制到离屏 div，
+// 用「位置 + 文档长度 + wrap 模式」作键，三者皆同才算同一坐标，内容/选区变化即重算（保证正确）。
+// 视口 x/y 仍由调用方用当前 rect/scrollTop 重算，故滚动/缩放永远准确。
+let _caretPosCache = { key: '', pos: null };
+function getCaretPosCached(el, position) {
+  const key = position + '|' + el.value.length + '|' + el.wrap;
+  if (_caretPosCache.key === key) return _caretPosCache.pos;
+  const pos = getTextareaCaretPos(el, position);
+  _caretPosCache = { key, pos };
+  return pos;
+}
+
 function showAiToolbar() {
   if (!aiToolbar) return;
   const s = editor.selectionStart, e = editor.selectionEnd;
   if (s === e) { hideAiToolbar(); return; } // 无选区则隐藏
   aiSel = { start: s, end: e };
-  const pos = getTextareaCaretPos(editor, e);           // 选区末端坐标（内容坐标）
+  const pos = getCaretPosCached(editor, e);           // 选区末端坐标（内容坐标，带缓存）
   const rect = editor.getBoundingClientRect();
   const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
   const y = rect.top + pos.top - editor.scrollTop;
@@ -1654,7 +1666,7 @@ function showFormatBrush() {
   const s = editor.selectionStart, e = editor.selectionEnd;
   if (s === e) { hideFormatBrush(); return; }   // 无选区则隐藏
   fmtSel = { start: s, end: e };
-  const pos = getTextareaCaretPos(editor, e);   // 选区末端坐标（内容坐标）
+  const pos = getCaretPosCached(editor, e);   // 选区末端坐标（内容坐标，带缓存）
   const rect = editor.getBoundingClientRect();
   const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
   const y = rect.top + pos.top - editor.scrollTop;
