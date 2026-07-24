@@ -3133,6 +3133,9 @@ function finishVimKey(e) {
 // 核心：键盘拦截与状态机（捕获阶段，优先于 Tab 缩进）
 function vimKeydown(e) {
   if (!isVimMode) return;
+  // IME 组合输入进行中（中文/日文等输入法拼音上屏阶段）：放行所有按键，
+  // 否则 Normal 模式下 e.preventDefault() 会把拼音 hjkl 当 Vim 指令吞掉，中文根本进不去
+  if (e.isComposing || e.keyCode === 229) return;
 
   // --- Insert 模式：仅 Esc / Ctrl+[ 退回 Normal，其余交给浏览器正常输入 ---
   if (vimState === 'insert') {
