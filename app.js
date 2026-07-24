@@ -212,6 +212,102 @@ function setupAudioDock() {
   preview.addEventListener('loadedmetadata', (e) => { if (e.target === activeAudio) syncSeek(); }, true);
 }
 
+// === SECTION: 播客 feed 匹配（解析 podcast.xml，打开文章时自动在顶部插入对应播客播放器）===
+// 前提：pic.want.biz 需对 podcast.xml 响应加 Access-Control-Allow-Origin，否则浏览器 CORS 拦截抓取。
+const PODCAST_FEED_URL = 'https://pic.want.biz/podcast.xml';
+let _podcastFeed = null;   // 内存缓存：一次抓取多次复用
+
+// 规范化标题：去掉 [Read]/[Podcast]NNN/(...) 等前导方括号标签与 .mp3 后缀，统一空白后转小写
+function normTitle(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/^\[[^\]]*\]\s*/g, '')   // 去 [Read] / [Podcast]918 等前导方括号标签
+    .replace(/\.mp3$/i, '')             // 去 .mp3 后缀（feed 文件名里带）
+    .replace(/^#+\s*/, '')              // 去 markdown 标题 #
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+// 两标题是否匹配：相等，或其一为另一者前缀（兼容 feed 标题被截断的情况，如长文只取前 N 字）
+function titlesMatch(a, b) {
+  const na = normTitle(a), nb = normTitle(b);
+  if (!na || !nb || na.length < 2 || nb.length < 2) return false;
+  return na === nb || na.startsWith(nb) || nb.startsWith(na);
+}
+// 当前文档核心标题：优先首个 H1，回退到文件名（去扩展名）
+function currentDocTitle() {
+  const m = editor.value.match(/^#\s+(.+)$/m);
+  if (m && m[1].trim()) return m[1].trim();
+  return (currentName || '').replace(/\.(md|markdown|txt)$/i, '').trim();
+}
+// 解析 feed：返回 [{ title, url, pubDate }]，失败返回 []（不抛，避免打断编辑）
+async function getPodcastFeed() {
+  if (_podcastFeed) return _podcastFeed;
+  try {
+    const resp = await fetch(PODCAST_FEED_URL, { cache: 'no-cache' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
+    const items = Array.from(xml.querySelectorAll('item'));
+    _podcastFeed = items.map((it) => {
+      const title = ((it.querySelector('title') || {}).textContent) || '';
+      const enc = it.querySelector('enclosure');
+      const url = enc ? (enc.getAttribute('url') || '') : (((it.querySelector('guid') || {}).textContent) || '');
+      const pubDate = ((it.querySelector('pubDate') || {}).textContent) || '';
+      return { title, url, pubDate };
+    }).filter((e) => e.url && /\.(mp3|wav|ogg|m4a|aac|flac)(\?|$)/i.test(e.url));
+    return _podcastFeed;
+  } catch (e) {
+    console.warn('[podcast] feed 加载失败（可能未配置 CORS）：', e && e.message);
+    return [];
+  }
+}
+// 在文档顶部（front matter 之后）插入一行播客链接；幂等：URL 已存在则不重复插入
+function insertPodcastAtTop(url, label) {
+  if (editor.value.indexOf(url) !== -1) return false;   // 已含该播客 → 跳过
+  const line = '[🎧 播客版](' + url + ')';
+  let body = editor.value;
+  const fm = body.match(/^---\n[\s\S]*?\n---\n?/);   // 兼容 YAML front matter：插在前面之后
+  if (fm) body = fm[0] + '\n' + line + '\n\n' + body.slice(fm[0].length);
+  else body = line + '\n\n' + body;
+  editor.value = body;
+  afterChange();
+  return true;
+}
+// 在光标处（独立成行）插入播客链接，用于手动触发
+function insertPodcastAtCursor(url) {
+  if (editor.value.indexOf(url) !== -1) { flash('本文已包含该播客'); return false; }
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const text = '\n[🎧 播客版](' + url + ')\n';
+  editor.value = editor.value.slice(0, s) + text + editor.value.slice(e);
+  editor.selectionStart = editor.selectionEnd = s + text.length;
+  afterChange();
+  return true;
+}
+// 文档「打开/载入」时调用：匹配 feed 集，命中则在顶部插入播放器（未命名草稿不插）
+async function syncPodcastOnLoad() {
+  try {
+    if (currentName === '未命名.md' && !/^#\s/m.test(editor.value)) return;
+    const feed = await getPodcastFeed();
+    if (!feed.length) return;
+    const docTitle = currentDocTitle();
+    if (!docTitle) return;
+    const hit = feed.find((it) => titlesMatch(it.title, docTitle));
+    if (hit && insertPodcastAtTop(hit.url, hit.title)) flash('🎧 已为本文插入播客播放器');
+  } catch (_) {}
+}
+// 手动触发（⋯ 菜单）：在当前光标处插入匹配到的播客；无匹配则提示
+async function matchPodcastManual() {
+  const feed = await getPodcastFeed();
+  if (!feed.length) { flash('播客 feed 加载失败（检查 pic.want.biz 的 CORS 配置）'); return; }
+  const docTitle = currentDocTitle();
+  const hit = feed.find((it) => titlesMatch(it.title, docTitle));
+  if (hit) {
+    if (insertPodcastAtCursor(hit.url)) flash('🎧 已插入播客播放器');
+  } else {
+    flash('未找到与本文标题匹配的播客');
+  }
+}
+
 // === SECTION: 主题：auto / light / dark，auto 跟随系统 ===
 const THEME_CYCLE = ['auto', 'light', 'dark'];
 const THEME_ICON = { auto: '🌓', light: '☀️', dark: '🌙' };
@@ -895,6 +991,7 @@ function loadDraft() {
   const name = localStorage.getItem('md-name');
   if (name) { currentName = name; currentNameIsAuto = false; }
   updateFileName();
+  syncPodcastOnLoad();
 }
 // 高亮去抖：input 每键都触发，合并到下一帧只跑一次，避免 hljs 全量重绘造成的逐键回流卡顿
 let _hlRaf = 0;
@@ -931,6 +1028,7 @@ async function openFile() {
       editor.value = await file.text();
       updateFileName();
       afterChange();
+      syncPodcastOnLoad();
       flash('已打开 ' + currentName);
       return;
     } catch (e) {
@@ -951,6 +1049,7 @@ fileInput.addEventListener('change', (e) => {
     localStorage.removeItem('md-lib-current');
     updateFileName();
     afterChange();
+    syncPodcastOnLoad();
     flash('已打开 ' + currentName);
   };
   reader.readAsText(f);
@@ -2119,6 +2218,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'addtolib') addToLibrary();
   else if (act === 'publish-blog') publishToBlog();
   else if (act === 'publish-podcast') publishToPodcast();
+  else if (act === 'match-podcast') matchPodcastManual();
   else if (act === 'nas-upload') uploadToNas();
   else if (act === 'nas-download') nasDownloadAndOpen();
   else if (act === 'copytext') copyText();
@@ -2725,6 +2825,7 @@ function openLibDocData(doc) {
   localStorage.setItem('md-lib-current', doc.id);
   updateFileName();
   afterChange({ skipWriteback: true });   // 打开即载入，不应刷新更新时间
+  syncPodcastOnLoad();
   setSaveState('saved', '✓ 文库');
   renderLibrary();
 }
@@ -2990,6 +3091,7 @@ async function initLibrary() {
         currentNameIsAuto = false;
         updateFileName();
         afterChange({ skipWriteback: true });
+        syncPodcastOnLoad();
         const cleanUrl = location.protocol + '//' + location.host + location.pathname;
         history.replaceState({ path: cleanUrl }, '', cleanUrl);
         toast('📥 已载入，修改后点「生成协作链接」即可覆盖发回', 'ok', 5000);
