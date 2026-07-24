@@ -1008,3 +1008,16 @@ body.fullscreen #btnToc { display: none; }
   font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px; border-radius: 6px;
 }
 #audioDock button:hover { background: var(--bg-elev); }
+
+/* 播客手动选择器：未匹配时列出最新 5 期供点选 */
+.podcast-pick-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.podcast-pick-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box;
+  text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-soft); color: var(--text); font-size: 13px;
+}
+.podcast-pick-item:hover { border-color: var(--accent); background: var(--bg-elev); }
+.podcast-pick-item .pp-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;
+}
+.podcast-pick-item .pp-date { flex: none; font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }

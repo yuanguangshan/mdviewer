@@ -336,8 +336,47 @@ async function syncPodcastOnLoad() {
     startPodcastPoll(docTitle);   // 未命中 → 轮询（生成播客要几分钟）
   } catch (_) {}
 }
-// 手动触发（⋯ 菜单）：在当前光标处插入匹配到的播客；无匹配则提示
+// 未命中时的兜底选择器：列出 feed 最新 5 篇，用户点选后在光标处插入（复用 .modal 样式体系）
+function showPodcastPicker(feed) {
+  const old = document.getElementById('podcastPickerModal');
+  if (old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.id = 'podcastPickerModal';
+  const items = feed.slice(0, 5);
+  const fmtDate = (s) => { const d = new Date(s); return isNaN(d) ? '' : d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate(); };
+  wrap.innerHTML =
+    '<div class="modal-box" role="dialog" aria-modal="true" aria-label="选择播客">' +
+      '<div class="modal-title">🎧 选择要插入的播客</div>' +
+      '<p class="modal-desc">未自动匹配到本文标题，从最新 ' + items.length + ' 期中手动选一个：</p>' +
+      '<div class="podcast-pick-list">' +
+        items.map((it, i) =>
+          '<button type="button" class="podcast-pick-item" data-i="' + i + '">' +
+            '<span class="pp-title">' + escapeHtml(it.title || '（无标题）') + '</span>' +
+            (it.pubDate ? '<span class="pp-date">' + fmtDate(it.pubDate) + '</span>' : '') +
+          '</button>'
+        ).join('') +
+      '</div>' +
+      '<div class="modal-actions"><button type="button" class="pp-cancel">取消</button></div>' +
+    '</div>';
+  document.body.appendChild(wrap);
+  const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  wrap.addEventListener('click', (e) => {
+    if (e.target === wrap) { close(); return; }
+    if (e.target.closest('.pp-cancel')) { close(); return; }
+    const btn = e.target.closest('.podcast-pick-item');
+    if (btn) {
+      const it = items[Number(btn.dataset.i)];
+      close();
+      if (it && insertPodcastAtCursor(it.url)) flash('🎧 已插入播客播放器');
+    }
+  });
+}
+// 手动触发（⋯ 菜单）：在当前光标处插入匹配到的播客；无匹配则弹选择器让用户从最新 5 期里挑
 async function matchPodcastManual() {
+  _podcastFeed = null;   // 手动触发时强制重抓，拿最新 feed
   const feed = await getPodcastFeed();
   if (!feed.length) { flash('播客 feed 加载失败（检查 pic.want.biz 的 CORS 配置）'); return; }
   const docTitle = currentDocTitle();
@@ -345,7 +384,7 @@ async function matchPodcastManual() {
   if (hit) {
     if (insertPodcastAtCursor(hit.url)) flash('🎧 已插入播客播放器');
   } else {
-    flash('未找到与本文标题匹配的播客');
+    showPodcastPicker(feed);
   }
 }
 
