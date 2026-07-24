@@ -781,9 +781,15 @@ function loadDraft() {
   if (name) { currentName = name; currentNameIsAuto = false; }
   updateFileName();
 }
+// 高亮去抖：input 每键都触发，合并到下一帧只跑一次，避免 hljs 全量重绘造成的逐键回流卡顿
+let _hlRaf = 0;
+function scheduleHighlight() {
+  if (_hlRaf) return;
+  _hlRaf = requestAnimationFrame(() => { _hlRaf = 0; renderEditorHighlight(); });
+}
 function afterChange(opts) {
   renderMarkdown();
-  renderEditorHighlight();
+  scheduleHighlight();
   updateStats();
   updateGutter();
   updatePos();
