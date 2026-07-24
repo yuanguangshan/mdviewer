@@ -656,26 +656,21 @@ function setFullscreen(on) {
   if (on) {
     const el = document.documentElement;
     if (el.requestFullscreen) { try { el.requestFullscreen(); } catch (_) {} }   // iOS 非视频不支持→仅应用级全屏
-    fsShowExit();   // 进入全屏：显示 ✕ 并开始空闲计时，2s 无操作后淡出
+    if (btnExitFullscreen) btnExitFullscreen.classList.add('idle');   // 进入全屏：✕ 默认隐藏，双击呼出
   } else {
-    clearTimeout(fsIdleTimer);
     if (btnExitFullscreen) btnExitFullscreen.classList.remove('idle');   // 退出全屏：恢复正常显示
     if (document.fullscreenElement) {
       try { document.exitFullscreen(); } catch (_) {}
     }
   }
 }
-// 全屏 ✕ 的空闲隐藏：阅读时 2s 无操作淡出；鼠标移动 / 滚动 / 触摸任一活动即重现并重新计时
-let fsIdleTimer = 0;
-function fsShowExit() {
+// 全屏退出键 ✕ 双击切换：进入全屏默认隐藏，双击屏幕任意处切换显隐。比空闲淡出更可控——
+// 滑动阅读时不再频繁闪现，需要时主动双击呼出 / 收起。
+document.addEventListener('dblclick', (e) => {
   if (!document.body.classList.contains('fullscreen') || !btnExitFullscreen) return;
-  btnExitFullscreen.classList.remove('idle');
-  clearTimeout(fsIdleTimer);
-  fsIdleTimer = setTimeout(() => btnExitFullscreen.classList.add('idle'), 2000);
-}
-window.addEventListener('mousemove', fsShowExit);
-window.addEventListener('touchstart', fsShowExit);
-window.addEventListener('scroll', fsShowExit, true);   // capture：scroll 不冒泡，捕获阶段才能接到 previewPane 等内部滚动
+  e.preventDefault();   // 避免双击误选正文文字
+  btnExitFullscreen.classList.toggle('idle');
+});
 if (btnFullscreen) btnFullscreen.addEventListener('click', () => setFullscreen(true));
 if (btnExitFullscreen) btnExitFullscreen.addEventListener('click', () => setFullscreen(false));
 document.addEventListener('fullscreenchange', () => {

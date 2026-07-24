@@ -74,7 +74,7 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .fs-float { top: 68px; }
 /* 退出：全屏时浮于视口右上角（与入口同列） */
 .exit-fs { top: 18px; }
-/* 全屏阅读沉浸感：2s 无操作后淡出（透明 + 鼠标穿透，不挡正文），任一活动（移动/滚动/触摸）即重现 */
+/* 全屏退出键：加 .idle 即隐藏（透明 + 鼠标穿透，不挡正文）。进入全屏默认 .idle，双击屏幕切换显隐 */
 .exit-fs.idle { opacity: 0; pointer-events: none; }
 
 .btn {
