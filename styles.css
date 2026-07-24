@@ -67,13 +67,15 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
   width: 38px; height: 38px; border-radius: 50%;
   border: 1px solid var(--border); background: var(--bg-elev); color: var(--text);
   font-size: 15px; line-height: 1; cursor: pointer; box-shadow: var(--shadow);
-  transition: color .15s, border-color .15s;
+  transition: color .15s, border-color .15s, opacity .35s ease;
 }
 .fs-float:hover, .exit-fs:hover { color: var(--accent-soft); border-color: var(--accent-soft); }
 /* 入口：浮于正文右上角（工具栏下方），上方留白宽松 */
 .fs-float { top: 68px; }
 /* 退出：全屏时浮于视口右上角（与入口同列） */
 .exit-fs { top: 18px; }
+/* 全屏阅读沉浸感：2s 无操作后淡出（透明 + 鼠标穿透，不挡正文），任一活动（移动/滚动/触摸）即重现 */
+.exit-fs.idle { opacity: 0; pointer-events: none; }
 
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--bg-elev);

@@ -656,10 +656,26 @@ function setFullscreen(on) {
   if (on) {
     const el = document.documentElement;
     if (el.requestFullscreen) { try { el.requestFullscreen(); } catch (_) {} }   // iOS 非视频不支持→仅应用级全屏
-  } else if (document.fullscreenElement) {
-    try { document.exitFullscreen(); } catch (_) {}
+    fsShowExit();   // 进入全屏：显示 ✕ 并开始空闲计时，2s 无操作后淡出
+  } else {
+    clearTimeout(fsIdleTimer);
+    if (btnExitFullscreen) btnExitFullscreen.classList.remove('idle');   // 退出全屏：恢复正常显示
+    if (document.fullscreenElement) {
+      try { document.exitFullscreen(); } catch (_) {}
+    }
   }
 }
+// 全屏 ✕ 的空闲隐藏：阅读时 2s 无操作淡出；鼠标移动 / 滚动 / 触摸任一活动即重现并重新计时
+let fsIdleTimer = 0;
+function fsShowExit() {
+  if (!document.body.classList.contains('fullscreen') || !btnExitFullscreen) return;
+  btnExitFullscreen.classList.remove('idle');
+  clearTimeout(fsIdleTimer);
+  fsIdleTimer = setTimeout(() => btnExitFullscreen.classList.add('idle'), 2000);
+}
+window.addEventListener('mousemove', fsShowExit);
+window.addEventListener('touchstart', fsShowExit);
+window.addEventListener('scroll', fsShowExit, true);   // capture：scroll 不冒泡，捕获阶段才能接到 previewPane 等内部滚动
 if (btnFullscreen) btnFullscreen.addEventListener('click', () => setFullscreen(true));
 if (btnExitFullscreen) btnExitFullscreen.addEventListener('click', () => setFullscreen(false));
 document.addEventListener('fullscreenchange', () => {
