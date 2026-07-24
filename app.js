@@ -342,10 +342,10 @@ function onPreviewAnchorClick(e) {
   const slug = decodeURIComponent(href.slice(1));   // 中文标题 hash 会被百分号编码，解码后才能匹配中文 id
   const heading = preview.getElementById(slug);
   if (!heading) return;
-  anchorNavLock = Date.now() + 800;   // 跳转锁：期间暂停比例同步 + scroll-spy（后者读 getBoundingClientRect 会 reflow 打断 smooth）
-  // 显式滚动预览区到标题（复用目录抽屉 tocJumpTo 的可靠逻辑，不再依赖浏览器默认行为）
-  const delta = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top;
-  previewPane.scrollBy({ top: delta, behavior: 'smooth' });
+  anchorNavLock = Date.now() + 550;   // 跳转锁：覆盖 450ms 手动动画 + 缓冲
+  // 手动平滑滚预览区到标题（不用浏览器原生 smooth——会被 reflow 取消停在半路）
+  const targetTop = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
+  smoothScrollTo(previewPane, Math.max(0, targetTop), 450);
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
 }
 
@@ -406,18 +406,33 @@ function setTocOpen(on) {
 }
 
 // 点击目录条目 → 滚动预览到对应标题，并同步编辑器到源码行（复用锚点跳转的锁机制）
+// 手动平滑滚动：逐帧「即时」设置 scrollTop。不依赖浏览器原生 smooth——后者进行中会被
+// getBoundingClientRect 的 reflow 取消，导致目录跳转停在半路（预览模式的顽疾；编辑模式用
+// 即时 editor.scrollTop= 所以从不中招）。每帧即时赋值，无「进行中」状态可被打断，又保留动画。
+let tocScrollAnim = 0;
+function smoothScrollTo(el, targetTop, duration) {
+  cancelAnimationFrame(tocScrollAnim);
+  const start = el.scrollTop;
+  const distance = targetTop - start;
+  if (Math.abs(distance) < 2) { el.scrollTop = targetTop; return; }
+  const t0 = performance.now();
+  const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);   // easeInOutQuad
+  const step = (now) => {
+    const t = Math.min(1, (now - t0) / duration);
+    el.scrollTop = start + distance * ease(t);
+    if (t < 1) tocScrollAnim = requestAnimationFrame(step);
+  };
+  tocScrollAnim = requestAnimationFrame(step);
+}
 function tocJumpTo(slug) {
   if (!slug) return;
   let heading = null;
   try { heading = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(slug)); } catch (_) {}
   if (!heading) heading = preview.getElementById(slug);
   if (!heading) return;
-  anchorNavLock = Date.now() + 800;   // 跳转锁：期间暂停比例同步 + scroll-spy（后者读 getBoundingClientRect 会 reflow 打断 smooth）
-  // 直接驱动预览区滚动容器：scrollIntoView 会遍历整条滚动祖先链，而本应用 body 为
-  // overflow:hidden，纯预览（全宽）下它偶发判定失败、完全不滚 preview-pane。
-  // 改用「标题相对预览区顶部的偏移」+ scrollBy，明确只滚 preview-pane，三视图皆稳。
-  const delta = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top;
-  previewPane.scrollBy({ top: delta, behavior: 'smooth' });
+  anchorNavLock = Date.now() + 550;   // 跳转锁：覆盖下方 450ms 手动动画 + 缓冲；期间暂停比例同步与 scroll-spy
+  const targetTop = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
+  smoothScrollTo(previewPane, Math.max(0, targetTop), 450);
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
 }
 
