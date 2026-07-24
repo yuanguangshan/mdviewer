@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v2.1.23';
+const CACHE_NAME = 'md-editor-v2.1.24';
 
 const SHELL = [
   './',
@@ -36,11 +36,6 @@ self.addEventListener('activate', (event) => {
     );
     await self.clients.claim();
   })());
-});
-
-/* ---------- 来自客户端的消息（如「立即刷新」请求跳过等待）---------- */
-self.addEventListener('message', (event) => {
-  if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 /* ---------- 请求拦截 ---------- */

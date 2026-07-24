@@ -90,9 +90,6 @@ function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
-function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-}
 
 // === SECTION: DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用） ===
 if (window.DOMPurify) {
@@ -796,7 +793,7 @@ function scheduleHighlight() {
   _hlRaf = requestAnimationFrame(() => { _hlRaf = 0; renderEditorHighlight(); });
 }
 function afterChange(opts) {
-  renderMarkdown();
+  scheduleRender();
   scheduleHighlight();
   updateStats();
   updateGutter();
@@ -999,10 +996,28 @@ function renameFile() {
   }
 }
 
+// 将 Blob 图片（libimg://id）内联为 data URL，使 HTML 自包含、可独立打开/粘贴。
+// 同时被「导出 HTML」与「复制 HTML」复用，避免把 blob: 临时链接泄漏到复制结果里。
+async function inlineLibImages(html) {
+  if (!libDb) return html;
+  const ids = [...new Set([...html.matchAll(/libimg:\/\/([a-z0-9]+)/gi)].map((m) => m[1]))];
+  for (const id of ids) {
+    try {
+      const rec = await idbGetImage(id);
+      if (rec && rec.blob) {
+        const dataUrl = await blobToDataURL(rec.blob);
+        html = html.split('src="libimg://' + id + '"').join('src="' + dataUrl + '"');
+      }
+    } catch (_) {}
+  }
+  return html;
+}
+
 // === SECTION: 复制 HTML（复用预览结果） ===
 async function copyHTML() {
   try {
-    await navigator.clipboard.writeText(preview.innerHTML);
+    const html = await inlineLibImages(lastSanitizedHtml || preview.innerHTML);
+    await navigator.clipboard.writeText(html);
     flash('已复制 HTML');
   } catch {
     flash('复制失败');
@@ -1081,20 +1096,8 @@ async function exportMarkdown() {
   flash('已导出 Markdown');
 }
 async function exportHTML() {
-  let html = lastSanitizedHtml || preview.innerHTML;
   // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
-  if (libDb) {
-    const ids = [...new Set([...html.matchAll(/libimg:\/\/([a-z0-9]+)/gi)].map((m) => m[1]))];
-    for (const id of ids) {
-      try {
-        const rec = await idbGetImage(id);
-        if (rec && rec.blob) {
-          const dataUrl = await blobToDataURL(rec.blob);
-          html = html.split('src="libimg://' + id + '"').join('src="' + dataUrl + '"');
-        }
-      } catch (_) {}
-    }
-  }
+  const html = await inlineLibImages(lastSanitizedHtml || preview.innerHTML);
   const doc = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'
     + escapeHtml(currentName) + '</title><style>' + EXPORT_CSS + '</style></head><body class="markdown-body">'
     + html + '</body></html>';
