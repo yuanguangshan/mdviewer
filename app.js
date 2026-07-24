@@ -216,6 +216,8 @@ function setupAudioDock() {
 // 前提：pic.want.biz 需对 podcast.xml 响应加 Access-Control-Allow-Origin，否则浏览器 CORS 拦截抓取。
 const PODCAST_FEED_URL = 'https://pic.want.biz/podcast.xml';
 let _podcastFeed = null;   // 内存缓存：一次抓取多次复用
+let _podcastPollTimer = null;   // 轮询定时器（生成播客需几分钟，打开未命中时启动）
+let _podcastPollCount = 0;
 
 // 规范化标题：去掉 [Read]/[Podcast]NNN/(...) 等前导方括号标签与 .mp3 后缀，统一空白后转小写
 function normTitle(s) {
@@ -283,16 +285,52 @@ function insertPodcastAtCursor(url) {
   afterChange();
   return true;
 }
-// 文档「打开/载入」时调用：匹配 feed 集，命中则在顶部插入播放器（未命名草稿不插）
+// 取消进行中的轮询（切文档/改名/关闭时调用，避免误插到别的文档）
+function stopPodcastPoll() {
+  if (_podcastPollTimer) { clearTimeout(_podcastPollTimer); _podcastPollTimer = null; }
+}
+// 打开未命中时启动轻量轮询：每 ~25s 重新抓 feed+匹配，最多 10 次（≈4 分钟），命中即自动插入。
+// 若文档身份（currentName + 首行 H1）变化则立即取消，防止误插到已切换的文档。
+function startPodcastPoll(docTitle) {
+  stopPodcastPoll();
+  _podcastPollCount = 0;
+  const INTERVAL = 25000, MAX = 10;
+  const fp = () => currentName + '\u0000' + (editor.value.match(/^#\s+(.+)$/m) || [,''])[1];
+  const anchor = fp();
+  const tick = async () => {
+    if (++_podcastPollCount > MAX) { stopPodcastPoll(); return; }
+    if (fp() !== anchor) { stopPodcastPoll(); return; }   // 文档身份变了 → 取消，防误插
+    try {
+      _podcastFeed = null;   // 强制重抓（feed 可能因生成完成而更新）
+      const feed = await getPodcastFeed();
+      const hit = feed.find((it) => titlesMatch(it.title, docTitle));
+      if (hit) {
+        if (insertPodcastAtTop(hit.url, hit.title)) flash('🎧 已为本文自动插入播客播放器');
+        stopPodcastPoll();
+      } else {
+        _podcastPollTimer = setTimeout(tick, INTERVAL);
+      }
+    } catch (_) {
+      _podcastPollTimer = setTimeout(tick, INTERVAL);
+    }
+  };
+  _podcastPollTimer = setTimeout(tick, INTERVAL);
+}
+// 文档「打开/载入」时调用：匹配 feed 集，命中则在顶部插入播放器；未命中则启动轮询（生成中的播客稍后自动匹配）
 async function syncPodcastOnLoad() {
   try {
+    stopPodcastPoll();   // 切文档时先取消上一次轮询
     if (currentName === '未命名.md' && !/^#\s/m.test(editor.value)) return;
-    const feed = await getPodcastFeed();
-    if (!feed.length) return;
     const docTitle = currentDocTitle();
     if (!docTitle) return;
+    const feed = await getPodcastFeed();
+    if (!feed.length) return;
     const hit = feed.find((it) => titlesMatch(it.title, docTitle));
-    if (hit && insertPodcastAtTop(hit.url, hit.title)) flash('🎧 已为本文插入播客播放器');
+    if (hit) {
+      if (insertPodcastAtTop(hit.url, hit.title)) flash('🎧 已为本文插入播客播放器');
+      return;
+    }
+    startPodcastPoll(docTitle);   // 未命中 → 轮询（生成播客要几分钟）
   } catch (_) {}
 }
 // 手动触发（⋯ 菜单）：在当前光标处插入匹配到的播客；无匹配则提示
