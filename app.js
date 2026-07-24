@@ -157,6 +157,9 @@ function renderAudioPlayers() {
 }
 let activeAudio = null;
 let audioDock = null;
+// 注意时序：本函数用「事件委托」把 play/pause/timeupdate 以捕获模式挂在 preview 容器上，
+// 不持有任何 <audio> 的 DOM 引用。因此即使 renderMarkdown/renderAudioPlayers 先于本函数
+// 执行（或之后反复重绘替换 <audio> 节点），事件依然能被捕获——初始化顺序不敏感。
 function setupAudioDock() {
   if (audioDock || !preview) return;
   const dock = document.createElement('div');
