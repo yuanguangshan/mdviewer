@@ -331,6 +331,24 @@ function scrollEditorToLine(line) {
   editor.selectionStart = editor.selectionEnd = pos;
   if (viewMode !== 'preview') editor.focus();
 }
+// 切换到预览时，把预览定位到编辑器当前所在章节（即时滚动，切换瞬间无需平滑）。
+// 编辑模式下目录跳转可靠，配合此函数即可「编辑定位 → 切预览保持」，绕开预览模式滚动顽疾。
+function syncPreviewToLine(lineNo) {
+  const lines = editor.value.split('\n');
+  let targetSlug = null;
+  for (let i = Math.min(lineNo, lines.length - 1); i >= 0; i--) {
+    const m = lines[i] && lines[i].match(/^#{1,6}\s+(.*)$/);
+    if (m) { targetSlug = slugify(m[1]); break; }
+  }
+  if (!targetSlug) return;   // 在任何标题之前 → 保持顶部
+  let h = null;
+  try { h = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(targetSlug)); } catch (e) {}
+  if (!h) h = preview.getElementById(targetSlug);
+  if (!h) return;
+  const targetTop = h.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
+  previewPane.scrollTop = Math.max(0, targetTop);
+}
+
 function onPreviewAnchorClick(e) {
   const a = e.target.closest('a');
   if (!a) return;
@@ -598,12 +616,21 @@ const VIEW_CYCLE = ['split', 'edit', 'preview'];
 const VIEW_LABEL = { split: '分屏', edit: '编辑', preview: '预览' };
 let viewMode = 'split';
 function setView(m) {
+  const prev = viewMode;
+  // 切到预览前，先记下编辑器当前可见首行（切完 editor 隐藏，其 scrollTop 可能归零，读不到）
+  let firstLine = null;
+  if (m === 'preview' && prev !== 'preview') {
+    const lh = parseFloat(getComputedStyle(editor).lineHeight) || 25;
+    firstLine = Math.round(editor.scrollTop / lh);
+  }
   viewMode = m;
   document.body.classList.remove('no-preview', 'no-editor');
   if (m === 'edit') document.body.classList.add('no-preview');
   if (m === 'preview') document.body.classList.add('no-editor');
   $('#btnView').textContent = VIEW_LABEL[m];
   if (m !== 'preview') editor.focus();
+  // 进入预览：rAF 等布局稳定后，把预览定位到编辑器当前所在章节（不回开头）
+  if (firstLine !== null) requestAnimationFrame(() => syncPreviewToLine(firstLine));
 }
 // 是否手机布局（单列）：以实际 grid 为准，并用 matchMedia 兜底，保证手机只切「编辑/预览」
 function isMobileLayout() {
