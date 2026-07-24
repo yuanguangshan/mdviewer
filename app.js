@@ -342,7 +342,7 @@ function syncPreviewToLine(lineNo) {
   }
   if (!targetSlug) return;   // 在任何标题之前 → 保持顶部
   let h = null;
-  try { h = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(targetSlug)); } catch (e) {}
+  try { h = preview.querySelector('#' + CSS.escape(targetSlug)); } catch (e) {}
   if (!h) { try { h = document.getElementById(targetSlug); } catch (e) {} }
   if (!h) return;
   const targetTop = h.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
@@ -442,7 +442,7 @@ function smoothScrollTo(el, targetTop, duration) {
 function tocJumpTo(slug) {
   if (!slug) return;
   let heading = null;
-  try { heading = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(slug)); } catch (_) {}
+  try { heading = preview.querySelector('#' + CSS.escape(slug)); } catch (_) {}
   if (!heading) { try { heading = document.getElementById(slug); } catch (_) {} }
   if (!heading) return;
   anchorNavLock = Date.now() + 550;   // 跳转锁：覆盖下方 450ms 手动动画 + 缓冲；期间暂停比例同步与 scroll-spy
