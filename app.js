@@ -347,6 +347,7 @@ const tocDrawer = $('#tocDrawer');
 const tocList = $('#tocList');
 const tocEmpty = $('#tocEmpty');
 const btnToc = $('#btnToc');
+const btnTocFs = $('#btnTocFs');   // 全屏模式下的浮动目录入口（工具栏隐藏时用它开关）
 let tocOpen = localStorage.getItem('md-toc') === '1';   // 开关状态持久化
 let tocSpyRaf = 0;
 
@@ -387,6 +388,10 @@ function setTocOpen(on) {
     btnToc.setAttribute('aria-expanded', on ? 'true' : 'false');
     btnToc.classList.toggle('active', on);
   }
+  if (btnTocFs) {   // 全屏浮动入口同步高亮
+    btnTocFs.setAttribute('aria-expanded', on ? 'true' : 'false');
+    btnTocFs.classList.toggle('active', on);
+  }
   if (on) {
     buildToc();
     updateTocActive();   // 打开即定位到当前阅读位置
@@ -401,7 +406,11 @@ function tocJumpTo(slug) {
   if (!heading) heading = preview.getElementById(slug);
   if (!heading) return;
   anchorNavLock = Date.now() + 450;   // 暂停比例同步滚动，避免和跳转互相拉扯
-  heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 直接驱动预览区滚动容器：scrollIntoView 会遍历整条滚动祖先链，而本应用 body 为
+  // overflow:hidden，纯预览（全宽）下它偶发判定失败、完全不滚 preview-pane。
+  // 改用「标题相对预览区顶部的偏移」+ scrollBy，明确只滚 preview-pane，三视图皆稳。
+  const delta = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top;
+  previewPane.scrollBy({ top: delta, behavior: 'smooth' });
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
 }
 
@@ -443,6 +452,7 @@ function setActiveTocItem(heading) {
 }
 
 if (btnToc) btnToc.addEventListener('click', () => setTocOpen(!tocOpen));
+if (btnTocFs) btnTocFs.addEventListener('click', () => setTocOpen(!tocOpen));   // 全屏浮动入口
 if ($('#tocClose')) $('#tocClose').addEventListener('click', () => setTocOpen(false));
 if (tocList) tocList.addEventListener('click', (e) => {
   const it = e.target.closest('.toc-item');
@@ -592,6 +602,7 @@ function setFullscreen(on) {
   if (on && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
   document.body.classList.toggle('fullscreen', on);
   if (btnExitFullscreen) btnExitFullscreen.hidden = !on;   // 用 hidden 属性显隐，默认隐藏（不依赖外部 CSS）
+  if (btnTocFs) btnTocFs.hidden = !on;   // 全屏时显示浮动目录入口（与 ✕ 退出同列）
   // 兜底：直接控制 chrome 显隐，即使样式未及时更新也能全屏
   const tb = document.querySelector('.toolbar'), sb = document.querySelector('.statusbar');
   if (tb) tb.style.display = on ? 'none' : '';
@@ -611,7 +622,9 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.body.classList.contains('fullscreen')) setFullscreen(false);
+  if (e.key !== 'Escape' || !document.body.classList.contains('fullscreen')) return;
+  if (tocOpen) setTocOpen(false);   // 全屏下目录开着 → Esc 先关目录，而非退出全屏
+  else setFullscreen(false);
 });
 
 // === SECTION: 同步滚动（编辑 ↔ 预览，仅双栏） ===
