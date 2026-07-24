@@ -343,7 +343,7 @@ function syncPreviewToLine(lineNo) {
   if (!targetSlug) return;   // 在任何标题之前 → 保持顶部
   let h = null;
   try { h = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(targetSlug)); } catch (e) {}
-  if (!h) h = preview.getElementById(targetSlug);
+  if (!h) { try { h = document.getElementById(targetSlug); } catch (e) {} }
   if (!h) return;
   const targetTop = h.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
   previewPane.scrollTop = Math.max(0, targetTop);
@@ -358,7 +358,7 @@ function onPreviewAnchorClick(e) {
   // 它会滚 documentElement 而非预览区，表现为点击正文目录链接后预览被拉回首页。
   e.preventDefault();
   const slug = decodeURIComponent(href.slice(1));   // 中文标题 hash 会被百分号编码，解码后才能匹配中文 id
-  const heading = preview.getElementById(slug);
+  const heading = document.getElementById(slug);
   if (!heading) return;
   anchorNavLock = Date.now() + 550;   // 跳转锁：覆盖 450ms 手动动画 + 缓冲
   // 手动平滑滚预览区到标题（不用浏览器原生 smooth——会被 reflow 取消停在半路）
@@ -422,9 +422,10 @@ function setTocOpen(on) {
 // 手动平滑滚动：逐帧「即时」设置 scrollTop。不依赖浏览器原生 smooth——后者进行中会被
 // getBoundingClientRect 的 reflow 取消，导致目录跳转停在半路（预览模式的顽疾；编辑模式用
 // 即时 editor.scrollTop= 所以从不中招）。每帧即时赋值，无「进行中」状态可被打断，又保留动画。
-let tocScrollAnim = 0;
+let tocScrollTimer = 0;
 function smoothScrollTo(el, targetTop, duration) {
-  cancelAnimationFrame(tocScrollAnim);
+  clearTimeout(tocScrollTimer);
+  targetTop = Math.max(0, targetTop);
   const start = el.scrollTop;
   const distance = targetTop - start;
   if (Math.abs(distance) < 2) { el.scrollTop = targetTop; return; }
@@ -433,15 +434,16 @@ function smoothScrollTo(el, targetTop, duration) {
   const step = (now) => {
     const t = Math.min(1, (now - t0) / duration);
     el.scrollTop = start + distance * ease(t);
-    if (t < 1) tocScrollAnim = requestAnimationFrame(step);
+    if (t < 1) tocScrollTimer = setTimeout(() => step(performance.now()), 16);
+    else el.scrollTop = targetTop;   // final precise landing (avoid 1px short)
   };
-  tocScrollAnim = requestAnimationFrame(step);
+  tocScrollTimer = setTimeout(() => step(performance.now()), 0);
 }
 function tocJumpTo(slug) {
   if (!slug) return;
   let heading = null;
   try { heading = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(slug)); } catch (_) {}
-  if (!heading) heading = preview.getElementById(slug);
+  if (!heading) { try { heading = document.getElementById(slug); } catch (_) {} }
   if (!heading) return;
   anchorNavLock = Date.now() + 550;   // 跳转锁：覆盖下方 450ms 手动动画 + 缓冲；期间暂停比例同步与 scroll-spy
   const targetTop = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
