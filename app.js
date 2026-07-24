@@ -646,11 +646,13 @@ $('#btnView').addEventListener('click', nextView);
 // === SECTION: 全屏：隐藏工具栏/状态栏（+ 尝试浏览器原生全屏），右上角 ✕ 退出 ===
 const btnFullscreen = $('#btnFullscreen');
 const btnExitFullscreen = $('#btnExitFullscreen');
+const btnTocFs = $('#btnTocFs');   // 全屏浮动目录按钮：默认隐藏，双击屏幕显隐（与 ✕ 同机制）
 function setFullscreen(on) {
   // 全屏时若文库抽屉开着，强制关闭，避免退出按钮（z-index:9999）盖在抽屉之上
   if (on && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
   document.body.classList.toggle('fullscreen', on);
   if (btnExitFullscreen) btnExitFullscreen.hidden = !on;   // 用 hidden 属性显隐，默认隐藏（不依赖外部 CSS）
+  if (btnTocFs) btnTocFs.hidden = !on;                     // 全屏浮动目录按钮：仅全屏可见
   // 兜底：直接控制 chrome 显隐，即使样式未及时更新也能全屏
   const tb = document.querySelector('.toolbar'), sb = document.querySelector('.statusbar');
   if (tb) tb.style.display = on ? 'none' : '';
@@ -659,8 +661,10 @@ function setFullscreen(on) {
     const el = document.documentElement;
     if (el.requestFullscreen) { try { el.requestFullscreen(); } catch (_) {} }   // iOS 非视频不支持→仅应用级全屏
     if (btnExitFullscreen) btnExitFullscreen.classList.add('idle');   // 进入全屏：✕ 默认隐藏，双击呼出
+    if (btnTocFs) btnTocFs.classList.add('idle');                     // 目录按钮同样默认隐藏
   } else {
     if (btnExitFullscreen) btnExitFullscreen.classList.remove('idle');   // 退出全屏：恢复正常显示
+    if (btnTocFs) btnTocFs.classList.remove('idle');
     if (document.fullscreenElement) {
       try { document.exitFullscreen(); } catch (_) {}
     }
@@ -672,9 +676,11 @@ document.addEventListener('dblclick', (e) => {
   if (!document.body.classList.contains('fullscreen') || !btnExitFullscreen) return;
   e.preventDefault();   // 避免双击误选正文文字
   btnExitFullscreen.classList.toggle('idle');
+  if (btnTocFs) btnTocFs.classList.toggle('idle');   // 目录按钮随 ✕ 一起显隐（双击统一控制全屏浮层控件）
 });
 if (btnFullscreen) btnFullscreen.addEventListener('click', () => setFullscreen(true));
 if (btnExitFullscreen) btnExitFullscreen.addEventListener('click', () => setFullscreen(false));
+if (btnTocFs) btnTocFs.addEventListener('click', () => setTocOpen(!tocOpen));   // 全屏浮动目录按钮 → 开/关右侧大纲抽屉
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && document.body.classList.contains('fullscreen')) {
     setFullscreen(false);   // 原生全屏被 Esc 退出时同步（含 hidden / 内联样式复位）
