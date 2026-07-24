@@ -74,17 +74,6 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .fs-float { top: 68px; }
 /* 退出：全屏时浮于视口右上角（与入口同列） */
 .exit-fs { top: 18px; }
-/* 全屏时的目录入口：工具栏已隐藏，浮于右上角 ✕ 退出键左侧，阅读长文也能开目录 */
-.toc-fs {
-  position: fixed; top: 18px; right: 64px; z-index: 9999;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 38px; height: 38px; border-radius: 50%;
-  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text);
-  font-size: 16px; line-height: 1; cursor: pointer; box-shadow: var(--shadow);
-  transition: color .15s, border-color .15s;
-}
-.toc-fs:hover { color: var(--accent-soft); border-color: var(--accent-soft); }
-.toc-fs.active { color: var(--accent-soft); border-color: var(--accent); }
 
 .btn {
   appearance: none; border: 1px solid var(--border); background: var(--bg-elev);

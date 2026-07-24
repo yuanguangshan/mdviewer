@@ -372,7 +372,6 @@ const tocDrawer = $('#tocDrawer');
 const tocList = $('#tocList');
 const tocEmpty = $('#tocEmpty');
 const btnToc = $('#btnToc');
-const btnTocFs = $('#btnTocFs');   // 全屏模式下的浮动目录入口（工具栏隐藏时用它开关）
 let tocOpen = localStorage.getItem('md-toc') === '1';   // 开关状态持久化
 let tocSpyRaf = 0;
 
@@ -412,10 +411,6 @@ function setTocOpen(on) {
   if (btnToc) {
     btnToc.setAttribute('aria-expanded', on ? 'true' : 'false');
     btnToc.classList.toggle('active', on);
-  }
-  if (btnTocFs) {   // 全屏浮动入口同步高亮
-    btnTocFs.setAttribute('aria-expanded', on ? 'true' : 'false');
-    btnTocFs.classList.toggle('active', on);
   }
   if (on) {
     buildToc();
@@ -496,7 +491,6 @@ function setActiveTocItem(heading) {
 }
 
 if (btnToc) btnToc.addEventListener('click', () => setTocOpen(!tocOpen));
-if (btnTocFs) btnTocFs.addEventListener('click', () => setTocOpen(!tocOpen));   // 全屏浮动入口
 if ($('#tocClose')) $('#tocClose').addEventListener('click', () => setTocOpen(false));
 if (tocList) tocList.addEventListener('click', (e) => {
   const it = e.target.closest('.toc-item');
@@ -655,7 +649,6 @@ function setFullscreen(on) {
   if (on && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
   document.body.classList.toggle('fullscreen', on);
   if (btnExitFullscreen) btnExitFullscreen.hidden = !on;   // 用 hidden 属性显隐，默认隐藏（不依赖外部 CSS）
-  if (btnTocFs) btnTocFs.hidden = !on;   // 全屏时显示浮动目录入口（与 ✕ 退出同列）
   // 兜底：直接控制 chrome 显隐，即使样式未及时更新也能全屏
   const tb = document.querySelector('.toolbar'), sb = document.querySelector('.statusbar');
   if (tb) tb.style.display = on ? 'none' : '';
