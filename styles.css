@@ -488,7 +488,12 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
   /* 窄屏软换行：隐藏行号栏；字号≥16px 防 iOS Safari 聚焦时自动缩放页面 */
   .gutter { display: none; }
   #editor { padding: 16px; font-size: 16px; line-height: 1.6; }
-  .statusbar { padding: 5px 10px; font-size: 11px; gap: 8px; }
+  /* iOS 圆角 + 底部 Home 指示条：左右各留 ≥16px 安全区（取「固定值」与 env 安全区的较大者），
+     底部叠加 safe-area-inset，把文本抬离屏幕圆角裁切区，首尾字符不再被圆角吃掉 */
+  .statusbar {
+    padding: 5px max(16px, env(safe-area-inset-left)) calc(5px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+    font-size: 11px; gap: 8px;
+  }
   /* 手机状态栏：左侧文件名（≤1/2 宽，超长省略），其余信息靠右成组 */
   .statusbar #fileName { flex: 0 1 50%; max-width: 50%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .statusbar #posInfo { flex: 0 0 auto; margin-left: auto; }
@@ -877,6 +882,75 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 
 /* 全屏模式下文库入口隐藏（与工具栏一同隐藏），避免浮层遮挡 */
 body.fullscreen #btnLibrary { display: none; }
+body.fullscreen #btnToc { display: none; }
+
+/* ---------- 目录（右侧大纲抽屉） ---------- */
+/* 镜像左侧「文库」抽屉，但从右滑入、不打码遮罩——阅读长文时可同时看到正文与大纲，
+   点击条目跳转章节，预览滚动时高亮当前所在（scroll-spy，见 app.js updateTocActive） */
+.toc-toggle.active { color: var(--accent-soft); background: var(--bg-elev); }
+.toc-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 100;
+  width: 300px; max-width: 82vw;
+  display: flex; flex-direction: column;
+  background: var(--bg-soft);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transform: translateX(100%);
+  transition: transform .22s cubic-bezier(.4,0,.2,1);
+  visibility: hidden;            /* 默认隐藏，避免渲染期间一闪而过；open 时覆盖为 visible */
+  will-change: transform;
+}
+.toc-drawer.open { transform: translateX(0); visibility: visible; }
+.toc-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.toc-title { font-weight: 700; font-size: 15px; }
+.toc-close {
+  appearance: none; border: 0; background: transparent; color: var(--text-dim);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 8px; border-radius: 7px;
+}
+.toc-close:hover { color: var(--text); background: var(--bg-elev); }
+.toc-list {
+  list-style: none; margin: 0; padding: 8px 6px; overflow-y: auto; flex: 1; min-height: 0;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.toc-list::-webkit-scrollbar { width: 8px; }
+.toc-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.toc-list::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.toc-item {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: transparent; color: var(--text-dim);
+  padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  font: 500 13px/1.45 inherit;                       /* 继承正文字族，仅调字号 */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background .12s, color .12s;
+}
+.toc-item:hover { color: var(--text); background: var(--bg-elev); }
+.toc-item.active {
+  color: var(--accent-soft); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* 按标题层级逐级缩进（h1 起 10px，每级 +12px） */
+.toc-item[data-level="1"] { padding-left: 10px; font-size: 14px; font-weight: 600; color: var(--text); }
+.toc-item[data-level="2"] { padding-left: 22px; }
+.toc-item[data-level="3"] { padding-left: 34px; }
+.toc-item[data-level="4"] { padding-left: 46px; }
+.toc-item[data-level="5"] { padding-left: 58px; }
+.toc-item[data-level="6"] { padding-left: 70px; }
+.toc-empty {
+  padding: 22px 20px; text-align: center; color: var(--text-dim);
+  font-size: 13px; line-height: 1.6; flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+}
+.toc-empty p { margin: 0; font-weight: 600; color: var(--text); }
+.toc-empty span { font-size: 12px; max-width: 220px; }
+.toc-empty code { font-family: var(--mono); background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+/* 移动端：目录抽屉放宽，与文库抽屉观感一致 */
+@media (max-width: 760px) {
+  .toc-drawer { width: 86vw; }
+}
 
 /* ---------- Vim 模式 ---------- */
 .vim-status {

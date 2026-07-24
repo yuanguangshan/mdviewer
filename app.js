@@ -291,6 +291,7 @@ function renderMarkdown() {
     const id = slugify(h.textContent);
     if (id) h.id = id;   // 始终以 slug 为 id，保证与 buildHeadingMap 一致、锚点可跳转
   });
+  buildToc();   // 同步重建右侧目录大纲（标题已就绪，含 id）
   lastSanitizedHtml = preview.innerHTML;   // 快照（含 libimg:// 引用，供导出时内联为 data URL）
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
@@ -340,6 +341,117 @@ function onPreviewAnchorClick(e) {
   anchorNavLock = Date.now() + 450;   // 避免与比例同步滚动互相打架
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
 }
+
+// === SECTION: 目录（右侧大纲抽屉：阅读长文时跳转章节 + 滚动高亮当前所在） ===
+const tocDrawer = $('#tocDrawer');
+const tocList = $('#tocList');
+const tocEmpty = $('#tocEmpty');
+const btnToc = $('#btnToc');
+let tocOpen = localStorage.getItem('md-toc') === '1';   // 开关状态持久化
+let tocSpyRaf = 0;
+
+// 渲染后重建目录：遍历预览里的所有标题，按层级缩进生成可点击条目
+function buildToc() {
+  if (!tocList) return;
+  const heads = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
+  tocList.innerHTML = '';
+  if (!heads.length) {
+    if (tocEmpty) tocEmpty.hidden = false;
+    return;
+  }
+  if (tocEmpty) tocEmpty.hidden = true;
+  const frag = document.createDocumentFragment();
+  heads.forEach((h) => {
+    const level = h.tagName.slice(1);
+    const text = (h.textContent || '').trim();
+    const slug = h.id || slugify(text);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toc-item';
+    btn.dataset.level = level;
+    btn.dataset.slug = slug;
+    btn.textContent = text || '(无标题)';
+    btn.title = text;
+    frag.appendChild(btn);
+  });
+  tocList.appendChild(frag);
+  if (tocOpen) updateTocActive();   // 文档变更后刷新当前章节高亮
+}
+
+function setTocOpen(on) {
+  tocOpen = on;
+  localStorage.setItem('md-toc', on ? '1' : '0');
+  tocDrawer.classList.toggle('open', on);
+  tocDrawer.setAttribute('aria-hidden', on ? 'false' : 'true');
+  if (btnToc) {
+    btnToc.setAttribute('aria-expanded', on ? 'true' : 'false');
+    btnToc.classList.toggle('active', on);
+  }
+  if (on) {
+    buildToc();
+    updateTocActive();   // 打开即定位到当前阅读位置
+  }
+}
+
+// 点击目录条目 → 滚动预览到对应标题，并同步编辑器到源码行（复用锚点跳转的锁机制）
+function tocJumpTo(slug) {
+  if (!slug) return;
+  let heading = null;
+  try { heading = preview.querySelector('h1,h2,h3,h4,h5,h6#' + CSS.escape(slug)); } catch (_) {}
+  if (!heading) heading = preview.getElementById(slug);
+  if (!heading) return;
+  anchorNavLock = Date.now() + 450;   // 暂停比例同步滚动，避免和跳转互相拉扯
+  heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
+}
+
+// scroll-spy：高亮预览当前所在章节。用 getBoundingClientRect 相对预览区顶部判定，
+// 不依赖 offsetParent，在 flex/换行布局下也稳定。
+function updateTocActive() {
+  if (!tocList) return;
+  const heads = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
+  if (!heads.length) return;
+  // 纯编辑模式（预览 display:none）无滚动上下文 → 高亮首个标题即可
+  if (previewPane.clientHeight === 0) {
+    setActiveTocItem(heads[0]);
+    return;
+  }
+  const paneTop = previewPane.getBoundingClientRect().top;
+  const offset = previewPane.clientHeight * 0.25;   // 标题进入预览顶部 25% 即视为「当前章节」
+  let active = null;
+  heads.forEach((h) => {
+    if (h.getBoundingClientRect().top - paneTop <= offset) active = h;
+  });
+  if (!active) active = heads[0];   // 顶部之上的首屏：高亮第一个标题
+  setActiveTocItem(active);
+}
+
+// 给指定标题对应的目录条目加 .active，其余清除；并把当前项滚进目录可视区
+function setActiveTocItem(heading) {
+  if (!heading) return;
+  const slug = heading.id || slugify(heading.textContent);
+  let cur = null;
+  tocList.querySelectorAll('.toc-item').forEach((it) => {
+    const on = it.dataset.slug === slug;
+    it.classList.toggle('active', on);
+    if (on) cur = it;
+  });
+  if (cur) {
+    const r = cur.getBoundingClientRect(), pr = tocList.getBoundingClientRect();
+    if (r.top < pr.top || r.bottom > pr.bottom) cur.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+if (btnToc) btnToc.addEventListener('click', () => setTocOpen(!tocOpen));
+if ($('#tocClose')) $('#tocClose').addEventListener('click', () => setTocOpen(false));
+if (tocList) tocList.addEventListener('click', (e) => {
+  const it = e.target.closest('.toc-item');
+  if (it) tocJumpTo(it.dataset.slug);
+});
+// Esc 关闭目录（与全屏退出共用 keydown，互不冲突：全屏时才拦截 Esc）
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && tocOpen && !document.body.classList.contains('fullscreen')) setTocOpen(false);
+});
 
 // === SECTION: Blob 图片：入库 + 解析 ===
 let imgUrlCache = new Map();   // id -> { blob }
@@ -521,6 +633,12 @@ editor.addEventListener('scroll', () => {
   syncScroll(editor, previewPane);
 });
 previewPane.addEventListener('scroll', () => syncScroll(previewPane, editor));
+// 目录 scroll-spy：rAF 节流，仅目录打开时计算当前章节
+previewPane.addEventListener('scroll', () => {
+  if (!tocOpen) return;
+  cancelAnimationFrame(tocSpyRaf);
+  tocSpyRaf = requestAnimationFrame(updateTocActive);
+});
 preview.addEventListener('click', onPreviewAnchorClick);   // 预览内点击 #锚点 → 同步滚动编辑器到对应行
 
 // === SECTION: 草稿自动保存（去抖 + 静默 + 容错） ===
@@ -2780,6 +2898,7 @@ function initSplitter() {
 setSaveState('', '就绪');
 initLibrary();
 renderMarkdown();
+setTocOpen(tocOpen);    // 还原目录抽屉开关状态（renderMarkdown 已建好大纲）
 applyWrap();            // 设置换行模式（默认软换行）+ 渲染覆盖层
 applyLayout();          // 应用上次保存的左右布局与分隔宽度
 initSplitter();         // 启用编辑区 / 预览区分隔线拖拽
