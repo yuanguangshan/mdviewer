@@ -335,10 +335,16 @@ function onPreviewAnchorClick(e) {
   if (!a) return;
   const href = a.getAttribute('href') || '';
   if (!href.startsWith('#') || href.length < 2) return;
-  const slug = href.slice(1);
+  // 阻止浏览器默认 hash 滚动：在「原生全屏 + body{overflow:hidden} + 嵌套 overflow:auto」下，
+  // 它会滚 documentElement 而非预览区，表现为点击正文目录链接后预览被拉回首页。
+  e.preventDefault();
+  const slug = decodeURIComponent(href.slice(1));   // 中文标题 hash 会被百分号编码，解码后才能匹配中文 id
   const heading = preview.getElementById(slug);
   if (!heading) return;
   anchorNavLock = Date.now() + 450;   // 避免与比例同步滚动互相打架
+  // 显式滚动预览区到标题（复用目录抽屉 tocJumpTo 的可靠逻辑，不再依赖浏览器默认行为）
+  const delta = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top;
+  previewPane.scrollBy({ top: delta, behavior: 'smooth' });
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
 }
 
