@@ -984,3 +984,27 @@ body.fullscreen #btnToc { display: none; }
 
 /* Normal 模式隐藏原生光标（方块光标取而代之） */
 .editor-wrap.vim-normal #editor { caret-color: transparent; }
+
+/* ---------- 底部常驻音频小窗（边看文字边听）---------- */
+#audioDock {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-soft);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, .16);
+  z-index: 9999;
+  backdrop-filter: blur(6px);
+}
+#audioDock[hidden] { display: none; }
+#audioDock .ad-title {
+  font-size: 13px; color: var(--text); max-width: 38%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9;
+}
+#audioDock .ad-seek { flex: 1; min-width: 60px; accent-color: var(--accent-soft, #4f8cff); }
+#audioDock .ad-time { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+#audioDock button {
+  border: 0; background: transparent; color: var(--text);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+#audioDock button:hover { background: var(--bg-elev); }

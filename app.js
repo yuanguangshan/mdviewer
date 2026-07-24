@@ -110,6 +110,107 @@ if (window.DOMPurify) {
   });
 }
 
+// === SECTION: 音频播放器（mp3 等链接自动渲染为 <audio> + 底部常驻小窗）===
+const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|aac|flac|webm|opus)(\?|#|$)/i;
+function filenameFromSrc(src) {
+  try {
+    const clean = decodeURIComponent(String(src).split('?')[0].split('#')[0]);
+    const name = clean.split('/').pop();
+    return name || String(src);
+  } catch (_) { return String(src); }
+}
+function fmtTime(s) {
+  s = Math.floor(s || 0);
+  const m = Math.floor(s / 60), r = s % 60;
+  return m + ':' + String(r).padStart(2, '0');
+}
+// 把预览里的音频链接 / 音频图片，转换为原生 <audio controls>（在 DOMPurify 之后，故不会被清洗）
+function renderAudioPlayers() {
+  if (activeAudio && !document.contains(activeAudio)) {
+    activeAudio = null;
+    if (audioDock) audioDock.hidden = true;
+  }
+  if (!preview) return;
+  preview.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (AUDIO_EXT_RE.test(href) && !a.querySelector('audio')) {
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'metadata';
+      audio.src = href;
+      audio.dataset.title = (a.textContent || '').trim() || filenameFromSrc(href);
+      a.replaceWith(audio);
+    }
+  });
+  preview.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src') || '';
+    if (AUDIO_EXT_RE.test(src) && !src.startsWith('libimg://')) {
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'metadata';
+      audio.src = src;
+      audio.dataset.title = (img.getAttribute('alt') || '').trim() || filenameFromSrc(src);
+      img.replaceWith(audio);
+    }
+  });
+}
+let activeAudio = null;
+let audioDock = null;
+function setupAudioDock() {
+  if (audioDock || !preview) return;
+  const dock = document.createElement('div');
+  dock.id = 'audioDock';
+  dock.hidden = true;
+  dock.innerHTML =
+    '<button class="ad-toggle" title="播放/暂停">▶</button>'
+    + '<span class="ad-title">♪</span>'
+    + '<input class="ad-seek" type="range" min="0" max="1000" value="0" step="1">'
+    + '<span class="ad-time">0:00</span>'
+    + '<button class="ad-close" title="关闭">✕</button>';
+  document.body.appendChild(dock);
+  audioDock = dock;
+  const toggle = dock.querySelector('.ad-toggle');
+  const seek = dock.querySelector('.ad-seek');
+  const timeEl = dock.querySelector('.ad-time');
+  const titleEl = dock.querySelector('.ad-title');
+  const close = dock.querySelector('.ad-close');
+
+  const syncToggle = () => { toggle.textContent = (activeAudio && !activeAudio.paused) ? '⏸' : '▶'; };
+  const syncSeek = () => {
+    if (!activeAudio) return;
+    const d = activeAudio.duration || 0, c = activeAudio.currentTime || 0;
+    seek.value = d ? String(Math.round((c / d) * 1000)) : '0';
+    timeEl.textContent = fmtTime(c) + (d ? ' / ' + fmtTime(d) : '');
+  };
+  const setActive = (a) => {
+    preview.querySelectorAll('audio').forEach((o) => { if (o !== a) o.pause(); });
+    activeAudio = a;
+    dock.hidden = false;
+    titleEl.textContent = '♪ ' + (a.dataset.title || '音频');
+    syncToggle(); syncSeek();
+  };
+
+  toggle.addEventListener('click', () => {
+    if (!activeAudio) return;
+    if (activeAudio.paused) activeAudio.play().catch(() => {}); else activeAudio.pause();
+  });
+  seek.addEventListener('input', () => {
+    if (!activeAudio || !activeAudio.duration) return;
+    activeAudio.currentTime = (Number(seek.value) / 1000) * activeAudio.duration;
+  });
+  close.addEventListener('click', () => {
+    if (activeAudio) activeAudio.pause();
+    dock.hidden = true;
+  });
+
+  // 事件委托：任意 <audio> 播放/暂停/进度变化都同步到底部小窗（无第二个媒体元素，不会双声）
+  preview.addEventListener('play', (e) => { if (e.target && e.target.tagName === 'AUDIO') setActive(e.target); }, true);
+  preview.addEventListener('pause', () => syncToggle(), true);
+  preview.addEventListener('ended', () => syncToggle(), true);
+  preview.addEventListener('timeupdate', (e) => { if (e.target === activeAudio) syncSeek(); }, true);
+  preview.addEventListener('loadedmetadata', (e) => { if (e.target === activeAudio) syncSeek(); }, true);
+}
+
 // === SECTION: 主题：auto / light / dark，auto 跟随系统 ===
 const THEME_CYCLE = ['auto', 'light', 'dark'];
 const THEME_ICON = { auto: '🌓', light: '☀️', dark: '🌙' };
@@ -177,7 +278,7 @@ async function ensureMermaid() {
     return true;
   }
   if (!mermaidLoading) {
-    mermaidLoading = loadScript('./vendor/mermaid.min.js').catch((e) => { console.warn(e); return false; });
+    mermaidLoading = loadScript('./vendor/mermaid.min.js').catch((e) => { console.warn(e); mermaidLoading = null; return false; });
   }
   const ok = await mermaidLoading;
   if (ok && window.mermaid && !mermaidReady) {
@@ -225,7 +326,7 @@ async function ensureKatex() {
     katexLoading = loadScript('./vendor/katex.min.js')
       .then(() => loadScript('./vendor/katex-auto-render.min.js'))
       .then(() => true)
-      .catch((e) => { console.warn(e); return false; });
+      .catch((e) => { console.warn(e); katexLoading = null; return false; });
   }
   return katexLoading;
 }
@@ -271,7 +372,7 @@ function renderMarkdown() {
       html = '<p style="color:#e06c75">渲染错误：' + escapeHtml(e.message) + '</p>';
     }
   }
-  preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html) : html;
+  preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html, { ADD_TAGS: ['audio', 'source'], ADD_ATTR: ['controls', 'preload', 'autoplay', 'loop'] }) : html;
   // 后处理高亮：对任何 marked 版本都稳，且不依赖已废弃的 setOptions({highlight})
   if (window.hljs) {
     preview.querySelectorAll('pre code').forEach((el) => {
@@ -282,6 +383,8 @@ function renderMarkdown() {
   renderMermaidDiagrams();
   // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
   renderMathFormulas();
+  // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
+  renderAudioPlayers();
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   headingLineMap = buildHeadingMap(editor.value);
   preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
@@ -558,6 +661,12 @@ function scheduleRender() {
 function renderEditorHighlight() {
   // 移动端（软换行）或缺 markdown 语法时不启用：避免错位 / 降级为纯文本
   if (window.innerWidth <= 760 || !window.hljs || !hljs.getLanguage || !hljs.getLanguage('markdown')) {
+    editor.parentElement.classList.remove('has-overlay');
+    editorHighlight.textContent = '';
+    return;
+  }
+  // 超长文档（数千行）整篇 hljs 重算开销大，跳过覆盖层高亮避免编辑卡顿（与移动端同降级策略）
+  if (editor.value.split('\n').length > 3000) {
     editor.parentElement.classList.remove('has-overlay');
     editorHighlight.textContent = '';
     return;
@@ -2053,6 +2162,7 @@ function blogSmartCut(str, maxLen) {
 
 // 解析 YAML Front Matter 与标题（优先 front matter → 第一个 H1 → 正文智能截断）
 function parseBlogMeta(markdown) {
+  markdown = markdown.replace(/\r\n?/g, '\n'); // 归一化 Windows 行尾，使 Front Matter 正则可匹配
   const meta = {};
   let body = markdown;
   const fm = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
@@ -2066,7 +2176,13 @@ function parseBlogMeta(markdown) {
         if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
         if (k === 'tags') {
           try { meta.tags = v.startsWith('[') ? JSON.parse(v.replace(/'/g, '"')) : v.split(',').map(s => s.trim()).filter(Boolean); }
-          catch (_) { meta.tags = v.split(',').map(s => s.trim()).filter(Boolean); }
+          catch (_) {
+            // 兜底：兼容 YAML 流序列 [a, b]（未加引号）这种常见写法
+            const raw = v.trim();
+            meta.tags = (raw.startsWith('[') && raw.endsWith(']'))
+              ? raw.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean)
+              : v.split(',').map(s => s.trim()).filter(Boolean);
+          }
         } else { meta[k] = v; }
       }
     });
@@ -3015,6 +3131,7 @@ updateStats();
 updateGutter();
 updatePos();
 renderShortcutHints();   // 在「⋯」菜单渲染快捷键提示
+setupAudioDock();         // 底部常驻音频小窗（事件委托，仅挂载一次）
 
 // 文库静默增量同步调度：联网即补传、定时兜底、持久化存储防清理
 window.addEventListener('online', () => syncLibraryToNas());
