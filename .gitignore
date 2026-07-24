@@ -7,3 +7,6 @@ worker/
 # wrangler 本地缓存/状态（防止从根目录跑 wrangler 时污染仓库）
 .wrangler/
 node_modules/
+
+# AI 工具本地上下文缓存（非代码，不入库）
+.ai/
