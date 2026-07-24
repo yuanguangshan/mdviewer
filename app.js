@@ -138,7 +138,8 @@ function renderAudioPlayers() {
       audio.controls = true;
       audio.preload = 'metadata';
       audio.src = href;
-      audio.dataset.title = (a.textContent || '').trim() || filenameFromSrc(href);
+      const linkText = (a.textContent || '').trim();
+      audio.dataset.title = (linkText && linkText !== href) ? linkText : filenameFromSrc(href);
       a.replaceWith(audio);
     }
   });
