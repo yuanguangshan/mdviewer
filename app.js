@@ -119,7 +119,7 @@ function filenameFromSrc(src) {
     return name || String(src);
   } catch (_) { return String(src); }
 }
-function fmtTime(s) {
+function fmtClock(s) {
   s = Math.floor(s || 0);
   const m = Math.floor(s / 60), r = s % 60;
   return m + ':' + String(r).padStart(2, '0');
@@ -180,7 +180,7 @@ function setupAudioDock() {
     if (!activeAudio) return;
     const d = activeAudio.duration || 0, c = activeAudio.currentTime || 0;
     seek.value = d ? String(Math.round((c / d) * 1000)) : '0';
-    timeEl.textContent = fmtTime(c) + (d ? ' / ' + fmtTime(d) : '');
+    timeEl.textContent = fmtClock(c) + (d ? ' / ' + fmtClock(d) : '');
   };
   const setActive = (a) => {
     preview.querySelectorAll('audio').forEach((o) => { if (o !== a) o.pause(); });
