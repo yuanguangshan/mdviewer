@@ -446,8 +446,12 @@ function setActiveTocItem(heading) {
     if (on) cur = it;
   });
   if (cur) {
+    // 显式只滚目录面板，让当前高亮项可见。绝不用 scrollIntoView——它会遍历滚动祖先链，
+    // 在「原生全屏 + body{overflow:hidden}」、长目录目标项在面板外时，误把预览区也滚了，
+    // 覆盖掉 tocJumpTo 的 scrollBy，导致点击章节后预览被拉回首页。只驱动 tocList 自身。
     const r = cur.getBoundingClientRect(), pr = tocList.getBoundingClientRect();
-    if (r.top < pr.top || r.bottom > pr.bottom) cur.scrollIntoView({ block: 'nearest' });
+    if (r.top < pr.top) tocList.scrollBy({ top: r.top - pr.top });
+    else if (r.bottom > pr.bottom) tocList.scrollBy({ top: r.bottom - pr.bottom });
   }
 }
 
