@@ -504,7 +504,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 // === SECTION: Blob 图片：入库 + 解析 ===
-let imgUrlCache = new Map();   // id -> { blob }
+let imgUrlCache = new Map();   // id -> { blob }，带 LRU 上限，防止 Blob 长期驻留内存（见 resolveImages）
+const IMG_CACHE_MAX = 30;      // 最多缓存 30 张图，超出淘汰最旧，避免大文档/多图场景内存只增不减
 let activeImgUrls = new Set();
 function blobToDataURL(blob) {
   return new Promise((res, rej) => {
@@ -530,7 +531,14 @@ function resolveImages() {
           if (!rec || !rec.blob) { img.classList.add('broken'); return; }
           entry = { blob: rec.blob };
           imgUrlCache.set(id, entry);
+          if (imgUrlCache.size > IMG_CACHE_MAX) {   // LRU 淘汰：超出上限删除最旧条目
+            const oldest = imgUrlCache.keys().next().value;
+            imgUrlCache.delete(oldest);
+          }
         } catch (_) { img.classList.add('broken'); return; }
+      } else {
+        imgUrlCache.delete(id);   // 命中缓存：刷新 LRU 顺序，常用图不被误淘汰
+        imgUrlCache.set(id, entry);
       }
       const url = URL.createObjectURL(entry.blob);
       newUrls.add(url);
@@ -630,8 +638,8 @@ function setView(m) {
 }
 // 是否手机布局（单列）：以实际 grid 为准，并用 matchMedia 兜底，保证手机只切「编辑/预览」
 function isMobileLayout() {
-  const g = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns;
-  return g === '1fr' || g === '1fr 0px' || window.matchMedia('(max-width: 760px)').matches;
+  // .workspace 是 flex 布局（非 grid），gridTemplateColumns 恒为 'none'，旧的前两项比较永不命中，直接以视口宽度判定
+  return window.matchMedia('(max-width: 760px)').matches;
 }
 function nextView() {
   const cycle = isMobileLayout() ? ['edit', 'preview'] : VIEW_CYCLE;
