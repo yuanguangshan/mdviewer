@@ -641,6 +641,12 @@ function onPreviewAnchorClick(e) {
   const a = e.target.closest('a');
   if (!a) return;
   const href = a.getAttribute('href') || '';
+  // 仅对 http(s) 链接在应用内小窗预览；其余（# 锚点 / mailto / 相对路径等）按原逻辑或浏览器默认
+  if (/^https?:\/\//i.test(href)) {
+    e.preventDefault();
+    openLinkPreview(href, (a.textContent || '').trim());
+    return;
+  }
   if (!href.startsWith('#') || href.length < 2) return;
   // 阻止浏览器默认 hash 滚动：在「原生全屏 + body{overflow:hidden} + 嵌套 overflow:auto」下，
   // 它会滚 documentElement 而非预览区，表现为点击正文目录链接后预览被拉回首页。
@@ -653,6 +659,86 @@ function onPreviewAnchorClick(e) {
   const targetTop = heading.getBoundingClientRect().top - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
   smoothScrollTo(previewPane, Math.max(0, targetTop), 450);
   if (headingLineMap.has(slug)) scrollEditorToLine(headingLineMap.get(slug));
+}
+
+// 判断 iframe 内容是否「被 X-Frame / CSP 拦截的错误页」（用于链接预览降级）。
+// 仅作启发式文本匹配；跨域成功页因父页读不到 contentDocument 而走 catch 分支，不会误判。
+function looksLikeBlockedPage(text) {
+  if (!text) return false;
+  return /refused to connect|did not allow|blocked by|x-frame-options|frame-ancestors|cannot be displayed in a frame|denied by|not allowed to display|refused to display|refused to frame/i.test(text);
+}
+if (typeof window !== 'undefined') window.looksLikeBlockedPage = looksLikeBlockedPage;
+
+// 笔记内链接预览：点击 http(s) 链接时，在应用内弹小窗（iframe）预览，避免离开笔记。
+// 安全：仅预览 http/https 协议（javascript: 等危险协议直接 return）；sandbox 不含 allow-top-navigation（iframe 无法劫持顶层）；referrer 不外露。
+// 降级：部分站点用 X-Frame-Options / CSP frame-ancestors 禁止内嵌，load 后检测内容为空或含拦截文案，则降级为「链接卡片」。
+function openLinkPreview(rawUrl, linkText) {
+  let url;
+  try { url = new URL(rawUrl); } catch (_) { return; }                       // 非法 URL 不预览
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return;          // 仅 http(s)
+  const old = document.getElementById('linkPreviewModal');
+  if (old) old.remove();
+  const host = url.hostname;
+  const safeUrl = escapeHtml(rawUrl);
+  const safeHost = escapeHtml(host);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'modal link-preview-modal';
+  wrap.id = 'linkPreviewModal';
+  wrap.innerHTML =
+    '<div class="modal-box lp-box" role="dialog" aria-modal="true" aria-label="链接预览">' +
+      '<div class="lp-bar">' +
+        '<img class="lp-favicon" alt="" src="//' + safeHost + '/favicon.ico" onerror="this.remove()">' +
+        '<span class="lp-host" title="' + safeUrl + '">' + safeHost + '</span>' +
+        '<div class="lp-actions">' +
+          '<button type="button" class="lp-open" title="在新标签打开">↗ 新标签打开</button>' +
+          '<button type="button" class="lp-close" title="关闭">✕</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="lp-body">' +
+        '<iframe class="lp-iframe" src="' + safeUrl + '" ' +
+          'sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-presentation" ' +
+          'referrerpolicy="no-referrer" loading="lazy"></iframe>' +
+        '<div class="lp-fallback" hidden>' +
+          '<div class="lp-fb-icon">🔗</div>' +
+          '<div class="lp-fb-title">' + escapeHtml(linkText || host || '链接') + '</div>' +
+          '<div class="lp-fb-url">' + safeUrl + '</div>' +
+          '<p class="lp-fb-note">该网站禁止在框架内嵌预览，请在新标签页打开查看。</p>' +
+          '<button type="button" class="lp-open lp-fb-open">↗ 在新标签打开</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(wrap);
+
+  const iframe = wrap.querySelector('.lp-iframe');
+  const fallback = wrap.querySelector('.lp-fallback');
+  const showFallback = () => { iframe.hidden = true; fallback.hidden = false; };
+
+  // X-Frame 拦截检测：load 后尝试读取内容文档
+  iframe.addEventListener('load', () => {
+    let blocked = false;
+    try {
+      const doc = iframe.contentDocument;   // 跨域成功 → 抛 SecurityError；同源被拦的错误页 → 可读
+      if (!doc || !doc.body || !doc.body.firstChild) {
+        blocked = true;   // body 为空 → 多半是被拦截的错误页
+      } else {
+        const txt = ((doc.body.innerText || '') + ' ' + (doc.body.textContent || '') + ' ' + (doc.body.innerHTML || '')).toLowerCase();
+        if (looksLikeBlockedPage(txt)) blocked = true;
+      }
+    } catch (e) {
+      blocked = false;   // 跨域正常加载，父页读不到内容文档 → 非拦截
+    }
+    if (blocked) showFallback();
+  });
+
+  const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  wrap.addEventListener('click', (e) => {
+    if (e.target === wrap) { close(); return; }        // 点遮罩关闭
+    if (e.target.closest('.lp-close')) { close(); return; }
+    if (e.target.closest('.lp-open')) { window.open(rawUrl, '_blank', 'noopener'); }
+  });
 }
 
 // === SECTION: 目录（右侧大纲抽屉：阅读长文时跳转章节 + 滚动高亮当前所在） ===
