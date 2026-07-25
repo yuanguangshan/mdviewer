@@ -531,6 +531,21 @@ async function renderMathFormulas() {
     console.warn('KaTeX 渲染失败:', e);
   }
 }
+// 让下划线 _ / __ 不再作为强调分隔符（技术写作里 snake_case、变量名常被误判成斜体）。
+// 改用 inline 扩展把下划线当作字面文本消费掉；* / ** 的斜体/粗体不受影响。
+if (window.marked && marked.use) {
+  marked.use({
+    extensions: [{
+      name: 'underscoreLiteral',
+      level: 'inline',
+      start(src) { return src.indexOf('_'); },
+      tokenizer(src) {
+        const m = /^_{1,2}/.exec(src);
+        if (m) return { type: 'text', raw: m[0], text: m[0] };
+      }
+    }]
+  });
+}
 function renderMarkdown() {
   const src = editor.value || '';
   let html;
