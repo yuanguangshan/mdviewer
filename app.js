@@ -2896,6 +2896,56 @@ const IMG_STORE = 'images';
 function imgStore(mode) { return libDb.transaction(IMG_STORE, mode).objectStore(IMG_STORE); }
 const idbGetImage = (id) => idbReq(() => imgStore('readonly').get(id));
 const idbPutImage = (rec) => idbReq(() => imgStore('readwrite').put(rec));
+const idbGetAllImageKeys = () => idbReq(() => imgStore('readonly').getAllKeys());
+const idbDeleteImage = (id) => idbReq(() => imgStore('readwrite').delete(id));
+
+// === SECTION: 孤儿图片 GC（Orphan Images Garbage Collection） ===
+// 痛点：粘贴/拖拽图片时 Blob 永久写入 images 仓库；若正文删掉 ![..](libimg://id)
+// 或整篇文档被删，该 Blob 不会自动释放，成了孤儿图片占用本地空间。
+// 机制：扫描全部文库文档正文 + 当前编辑器内容，提取所有被引用的 libimg://id 组成 Set；
+// 再遍历 images 仓库，删除不在 Set 中的无主 Blob。
+// 触发：① 启动 10s 后静默运行（文库闲置）；② 文库抽屉「🧹 清理图片」手动触发。
+let _gcRunning = false;
+async function gcOrphanImages({ silent = false } = {}) {
+  if (_gcRunning) return -1;            // 已有 GC 在进行，跳过
+  _gcRunning = true;
+  try {
+    await openLibDb();
+    if (!libDb) return 0;              // IndexedDB 不可用，无操作
+    // 1. 收集所有被引用的图片 id（含尚未写入文库的当前编辑器内容，避免误删刚粘贴的图片）
+    const referenced = new Set();
+    const addRefs = (text) => {
+      if (!text) return;
+      const re = /libimg:\/\/([a-z0-9]+)/gi;
+      let m;
+      while ((m = re.exec(text)) !== null) referenced.add(m[1]);
+    };
+    addRefs(editor && editor.value);
+    try {
+      const docs = await idbGetAll();
+      docs.forEach((d) => addRefs(d && (d.content || '')));
+    } catch (_) { /* 扫描文档失败不阻断，至少保护当前编辑器引用 */ }
+    // 2. 遍历 images 仓库，安全删除无主 Blob（逐条 try，单条失败不影响其余）
+    let keys = [];
+    try { keys = await idbGetAllImageKeys(); } catch (_) { return 0; }
+    let removed = 0;
+    for (const id of keys) {
+      if (!referenced.has(id)) {
+        try { await idbDeleteImage(id); removed++; } catch (_) {}
+      }
+    }
+    if (!silent) {
+      flash(removed > 0 ? ('🧹 已清理 ' + removed + ' 张未引用的图片') : '🧹 没有需要清理的孤儿图片');
+    } else if (removed > 0) {
+      console.info('[gc] 清理孤儿图片 ' + removed + ' 张');
+    }
+    return removed;
+  } catch (_) {
+    return 0;
+  } finally {
+    _gcRunning = false;
+  }
+}
 
 function genId() { return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function fmtTime(ts) {
@@ -3158,6 +3208,11 @@ async function downloadLibDoc(id) {
 const libFileInput = $('#libFileInput');
 if (libFileInput) {
   $('#libUpload').addEventListener('click', () => libFileInput.click());
+  const libGcBtn = $('#libGc');
+  if (libGcBtn) libGcBtn.addEventListener('click', () => {
+    libGcBtn.disabled = true;
+    gcOrphanImages({ silent: false }).then(() => { libGcBtn.disabled = false; }).catch(() => { libGcBtn.disabled = false; });
+  });
   libFileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -3453,6 +3508,8 @@ function initSplitter() {
 
 setSaveState('', '就绪');
 initLibrary();
+// 文库闲置 GC：启动 10s 后静默扫描孤儿图片并清理（不弹提示）
+setTimeout(() => { gcOrphanImages({ silent: true }).catch(() => {}); }, 10000);
 renderMarkdown();
 setTocOpen(tocOpen);    // 还原目录抽屉开关状态（renderMarkdown 已建好大纲）
 applyWrap();            // 设置换行模式（默认软换行）+ 渲染覆盖层

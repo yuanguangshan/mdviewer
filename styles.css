@@ -887,6 +887,14 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 }
 .lib-foot-count { font-weight: 600; color: var(--text); }
 .lib-foot-note { display: inline-flex; align-items: center; gap: 4px; }
+.lib-gc-btn {
+  flex: 0 0 auto; padding: 3px 9px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text-dim);
+  font-size: 11.5px; line-height: 1.4; cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.lib-gc-btn:hover { color: var(--text); border-color: var(--accent-soft); background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev)); }
+.lib-gc-btn:disabled { opacity: .5; cursor: default; }
 
 /* 全屏模式下文库入口隐藏（与工具栏一同隐藏），避免浮层遮挡 */
 body.fullscreen #btnLibrary { display: none; }
