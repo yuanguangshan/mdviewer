@@ -1478,7 +1478,8 @@ const TEXT_ACTIONS = {
       const f = $find.value;
       if (!f) return null;
       if ($re.checked) {
-        try { return new RegExp(f, 'g'); } catch (e) { $count.textContent = '正则无效：' + e.message; return false; }
+        // 加 m（多行）标志：使 ^ $ 表示行首/行尾（而非整段首尾），符合"逐行查找"直觉
+        try { return new RegExp(f, 'gm'); } catch (e) { $count.textContent = '正则无效：' + e.message; return false; }
       }
       const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(esc, 'g');
@@ -1490,6 +1491,20 @@ const TEXT_ACTIONS = {
       s = s.split('\\n').join('\n').split('\\t').join('\t')        // 转换单反斜杠转义序列
             .split('\\r').join('\r').split('\\f').join('\f').split('\\v').join('\v');
       return s.split('@@__BS__@@').join('\\');                       // 还原字面反斜杠
+    }
+    // 单处替换专用：把替换串里的 $1/$2…（捕获组）、$&（整段匹配）按当前匹配 m 解析为真实文本。
+    // 不能用 processReplacement 的“裸 $ → $$”逻辑（那是给原生 replaceAll 用的），否则 $1 会被当字面量；
+    // 这里直接基于 m 数组手动求值，与 replaceAll 走的原生 src.replace(re, processReplacement(...)) 互补。
+    function evaluateMatchReplacement(replStr, matchArray) {
+      return replStr.replace(/\$(\$|&|\d+)/g, (ref, p) => {
+        if (p === '$') return '$';
+        if (p === '&') return matchArray[0];
+        const idx = parseInt(p, 10);
+        if (idx > 0 && idx < matchArray.length) {
+          return matchArray[idx] !== undefined ? matchArray[idx] : '';
+        }
+        return ref;
+      });
     }
     function recount() {
       const re = buildRegex();
@@ -1509,7 +1524,7 @@ const TEXT_ACTIONS = {
       if (!m) { $count.textContent = '未找到匹配'; return; }
       editor.focus();
       editor.setSelectionRange(m.index, m.index + m[0].length);
-      cursor = m.index + m[0].length;
+      cursor = m.index + (m[0].length || 1);   // 零宽断言（^ $ \b）length=0，兜底 +1 防原地死循环
       $count.textContent = (wrapped ? '已到末尾，回到开头 · ' : '') + '找到 ' + total + ' 处';
     }
     // 替换下一处（保留 $1 等反向引用语义）
@@ -1522,10 +1537,10 @@ const TEXT_ACTIONS = {
       if (!m) { re.lastIndex = 0; m = re.exec(src); }
       if (!m) { $count.textContent = '没有可替换的匹配'; return; }
       const start = m.index, end = start + m[0].length;
-      const single = new RegExp(m[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const repl = m[0].replace(single, processReplacement($replace.value));
+      // 用自定义求值器解析 $1/$& 等反向引用（single 字面正则无捕获组，原生 replace 会把 $1 当字面量）
+      const repl = evaluateMatchReplacement(processReplacement($replace.value), m);
       const out = src.slice(0, start) + repl + src.slice(end);
-      cursor = start + repl.length;
+      cursor = start + (repl.length || 1);   // 零宽匹配时 repl 可能为空，兜底 +1 防死循环
       commitText(out, '查找替换（1 处）');
       editor.focus();
       editor.setSelectionRange(cursor, cursor);
