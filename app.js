@@ -1542,7 +1542,34 @@ const FORMAT_ACTIONS = {
   fmtItalic: () => wrapSelection('*', '*', '斜体'),
   fmtCode:   () => wrapSelection('`', '`', '代码'),
   fmtLink:   () => wrapSelection('[', '](https://)', '链接文字'),
-  fmtImage:  () => wrapSelection('![', '](https://)', '图片描述'),
+  fmtImage:  () => {
+    const s = editor.selectionStart, e = editor.selectionEnd;
+    const sel = editor.value.slice(s, e);
+    const alt = sel || '图片描述';
+    const url = prompt('请输入图片链接（留空则选取本地图片文件）：', '');
+    if (url === null) { editor.focus(); return; }
+    const trimmed = url.trim();
+    if (trimmed) {
+      // 用户输入了 URL → 插入 Markdown 图片语法
+      const insert = '![' + alt + '](' + trimmed + ')';
+      editor.value = editor.value.slice(0, s) + insert + editor.value.slice(e);
+      const pos = s + insert.length;
+      editor.selectionStart = editor.selectionEnd = pos;
+      editor.dispatchEvent(new Event('input'));
+      editor.focus();
+    } else {
+      // 空 URL → 弹出文件选择器上传本地图片
+      editor.focus();
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = () => {
+        const file = input.files && input.files[0];
+        if (file) insertImage(file);
+      };
+      input.click();
+    }
+  },
   fmtQuote:  () => prefixLines((ln) => ln ? '> ' + ln : '>'),
   fmtUl:     () => prefixLines((ln) => ln ? '- ' + ln : '-'),
   fmtOl:     () => prefixLines((ln, i) => ln ? (i + 1) + '. ' + ln : '1. '),
