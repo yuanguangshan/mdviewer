@@ -532,19 +532,15 @@ async function renderMathFormulas() {
   }
 }
 // 让下划线 _ / __ 不再作为强调分隔符（技术写作里 snake_case、变量名常被误判成斜体）。
-// 改用 inline 扩展把下划线当作字面文本消费掉；* / ** 的斜体/粗体不受影响。
-if (window.marked && marked.use) {
-  marked.use({
-    extensions: [{
-      name: 'underscoreLiteral',
-      level: 'inline',
-      start(src) { return src.indexOf('_'); },
-      tokenizer(src) {
-        const m = /^_{1,2}/.exec(src);
-        if (m) return { type: 'text', raw: m[0], text: m[0] };
-      }
-    }]
-  });
+// 注意：marked 的内建 em/strong 优先级高于自定义 inline 扩展，扩展永远抢不过 _，
+// 所以这里直接改 marked 内部的右分隔符正则 emStrongRDelimUnd：换成永不匹配的正则，
+// 使 _..._ / __...__ 永远找不到右边界、被当字面文本；* / ** 的斜体/粗体完全不受影响。
+if (window.marked && marked.Lexer && marked.Lexer.rules && marked.Lexer.rules.inline) {
+  const NEVER = /x^never_match_x/;   // 任何正常文本都不会包含，使 _ 的右分隔符永不命中
+  for (const mode of ['normal', 'gfm', 'breaks']) {
+    const rules = marked.Lexer.rules.inline[mode];
+    if (rules && rules.emStrongRDelimUnd) rules.emStrongRDelimUnd = NEVER;
+  }
 }
 function renderMarkdown() {
   const src = editor.value || '';
