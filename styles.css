@@ -4,6 +4,7 @@
   --bg-soft: #171a21;
   --bg-elev: #1e222b;
   --border: #2a2f3a;
+  --scrollbar-thumb: #3d4558;
   --text: #e6e9ef;
   --text-dim: #9aa3b2;
   --accent: #4f46e5;
@@ -20,6 +21,7 @@
   --bg-soft: #ffffff;
   --bg-elev: #ffffff;
   --border: #e2e8f0;
+  --scrollbar-thumb: #c8d0dc;
   --text: #1a2030;
   --text-dim: #64748b;
   --accent: #4f46e5;
@@ -460,12 +462,12 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 }
 
 /* ---------- 细滚动条（跟随主题） ---------- */
-.editor-wrap, .preview-pane, .lib-list, .menu, .workspace { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.editor-wrap, .preview-pane, .lib-list, .menu, .workspace { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 .editor-wrap::-webkit-scrollbar, .preview-pane::-webkit-scrollbar, .lib-list::-webkit-scrollbar, .menu::-webkit-scrollbar {
   width: 8px; height: 8px;
 }
 .editor-wrap::-webkit-scrollbar-thumb, .preview-pane::-webkit-scrollbar-thumb, .lib-list::-webkit-scrollbar-thumb, .menu::-webkit-scrollbar-thumb {
-  background: var(--border); border-radius: 8px;
+  background: var(--scrollbar-thumb); border-radius: 8px;
 }
 .editor-wrap::-webkit-scrollbar-thumb:hover, .preview-pane::-webkit-scrollbar-thumb:hover, .lib-list::-webkit-scrollbar-thumb:hover, .menu::-webkit-scrollbar-thumb:hover {
   background: var(--text-dim);
@@ -919,10 +921,10 @@ body.fullscreen #btnToc { display: none; }
 .toc-close:hover { color: var(--text); background: var(--bg-elev); }
 .toc-list {
   list-style: none; margin: 0; padding: 8px 6px; overflow-y: auto; flex: 1; min-height: 0;
-  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .toc-list::-webkit-scrollbar { width: 8px; }
-.toc-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.toc-list::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
 .toc-list::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 .toc-item {
   display: block; width: 100%; text-align: left;
