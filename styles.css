@@ -202,8 +202,10 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding: 6px 16px; font-size: 12px; color: var(--text-dim);
   background: var(--bg-soft); border-top: 1px solid var(--border);
+  flex-wrap: nowrap; overflow: hidden; white-space: nowrap;
 }
-.statusbar #posInfo { flex: 1; text-align: center; }
+.statusbar #posInfo { flex: 1; text-align: center; min-width: 0; }
+.statusbar #fileName { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
 #saveState.flash { color: var(--accent-soft); font-weight: 700; }
 .statusbar .version { opacity: .45; font-size: 11px; }
 /* NAS 静默增量同步状态点：idle 灰 / syncing 蓝脉冲 / ok 绿 / error 红 */

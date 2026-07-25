@@ -2735,7 +2735,13 @@ function openLibDb() {
         db.createObjectStore('images', { keyPath: 'id' });   // 图片 Blob 单独入库，正文只存 libimg://<id>
       }
     };
-    req.onsuccess = () => { libDb = req.result; resolve(libDb); };
+    req.onsuccess = () => {
+      libDb = req.result;
+      // 浏览器可能因后台回收、存储压力等关闭空闲连接，重置 libDb 以便下次 openLibDb() 重连
+      libDb.onclose = () => { libDb = null; };
+      libDb.onversionchange = () => { libDb.close(); libDb = null; };
+      resolve(libDb);
+    };
     req.onerror = () => reject(req.error);
   });
 }
@@ -2843,8 +2849,17 @@ const libSearch = $('#libSearch');
 let libDocsCache = [];
 
 async function renderLibrary() {
-  if (!libDb) return;
-  try { libDocsCache = await idbGetAll(); } catch (_) { libDocsCache = []; }
+  if (!libDb) {
+    try { await openLibDb(); } catch (_) { return; }
+  }
+  try { libDocsCache = await idbGetAll(); } catch (_) {
+    // 连接可能已被浏览器关闭（后台回收等），重置后重试一次
+    libDb = null;
+    try {
+      await openLibDb();
+      libDocsCache = await idbGetAll();
+    } catch (_) { libDocsCache = []; }
+  }
   libDocsCache.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const kw = (libSearch.value || '').trim().toLowerCase();
   // 全文检索：文件名 + 正文一起匹配（纯内存，毫秒级）
