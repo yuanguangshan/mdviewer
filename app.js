@@ -1452,7 +1452,7 @@ const TEXT_ACTIONS = {
     panel.innerHTML =
       '<div class="fr-row">' +
         '<input id="frFind" class="fr-input" type="text" placeholder="查找…" autocomplete="off" spellcheck="false">' +
-        '<input id="frReplace" class="fr-input" type="text" placeholder="替换为（可留空）" autocomplete="off" spellcheck="false">' +
+        '<input id="frReplace" class="fr-input" type="text" placeholder="替换为（\\n 换行；留空=删除）" autocomplete="off" spellcheck="false">' +
         '<label class="fr-re"><input id="frRe" type="checkbox"> 正则</label>' +
       '</div>' +
       '<div class="fr-row fr-row2">' +
@@ -1482,6 +1482,14 @@ const TEXT_ACTIONS = {
       }
       const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(esc, 'g');
+    }
+    // 替换串转义：支持 \n \t \r \f \v 等（与查找框正则一致）；\$ → 字面 $；\\ → 字面反斜杠；保留 $1 反向引用
+    function processReplacement(s) {
+      s = s.split('\\$').join('$$');                                  // \$ → 字面 $（JS 替换串里 $$ 表示字面 $）
+      s = s.split('\\\\').join('@@__BS__@@');                       // 先保护字面反斜杠对 \\
+      s = s.split('\\n').join('\n').split('\\t').join('\t')        // 转换单反斜杠转义序列
+            .split('\\r').join('\r').split('\\f').join('\f').split('\\v').join('\v');
+      return s.split('@@__BS__@@').join('\\');                       // 还原字面反斜杠
     }
     function recount() {
       const re = buildRegex();
@@ -1515,7 +1523,7 @@ const TEXT_ACTIONS = {
       if (!m) { $count.textContent = '没有可替换的匹配'; return; }
       const start = m.index, end = start + m[0].length;
       const single = new RegExp(m[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const repl = m[0].replace(single, $replace.value);
+      const repl = m[0].replace(single, processReplacement($replace.value));
       const out = src.slice(0, start) + repl + src.slice(end);
       cursor = start + repl.length;
       commitText(out, '查找替换（1 处）');
@@ -1528,9 +1536,10 @@ const TEXT_ACTIONS = {
       const re = buildRegex(); if (re === false) return;
       if (!re) { $count.textContent = '请输入查找内容'; return; }
       const src = editor.value;
-      let count = 0;
-      const out = src.replace(re, () => { count++; return $replace.value; });
+      const repl = processReplacement($replace.value);
+      const count = (src.match(re) || []).length;
       if (count === 0) { $count.textContent = '未找到匹配'; return; }
+      const out = src.replace(re, repl);
       commitText(out, `查找替换（${count} 处）`);
       $count.textContent = `已替换 ${count} 处`;
       closePanel();
