@@ -1441,27 +1441,121 @@ function commitText(next, label) {
 }
 
 const TEXT_ACTIONS = {
-  // 1. 全局查找替换（支持正则开关）
+  // 1. 全局查找替换（应用内浮层，不再用 window.prompt/confirm 系统弹窗）
   searchReplace() {
-    const target = window.prompt('要查找的文本（留空取消）：', '') || '';
-    if (!target) { flash('已取消'); return; }
-    const useRe = window.confirm('把查找内容当作正则表达式？(取消=纯文本)');
-    const replacement = window.prompt('替换为：', '') || '';
-    if (replacement === null) { flash('已取消'); return; }
-    const src = editor.value;
-    let out, count;
-    if (useRe) {
-      let re;
-      try { re = new RegExp(target, 'g'); } catch (e) { flash('正则无效：' + e.message); return; }
-      count = (src.match(re) || []).length;
-      out = src.replace(re, replacement);
-    } else {
-      const parts = src.split(target);
-      count = Math.max(0, parts.length - 1);
-      out = parts.join(replacement);
+    let panel = document.getElementById('findReplacePanel');
+    if (panel) { const f = panel.querySelector('#frFind'); f.focus(); f.select(); return; }
+
+    panel = document.createElement('div');
+    panel.id = 'findReplacePanel';
+    panel.className = 'find-replace';
+    panel.innerHTML =
+      '<div class="fr-row">' +
+        '<input id="frFind" class="fr-input" type="text" placeholder="查找…" autocomplete="off" spellcheck="false">' +
+        '<input id="frReplace" class="fr-input" type="text" placeholder="替换为（可留空）" autocomplete="off" spellcheck="false">' +
+        '<label class="fr-re"><input id="frRe" type="checkbox"> 正则</label>' +
+      '</div>' +
+      '<div class="fr-row fr-row2">' +
+        '<span id="frCount" class="fr-count">输入查找内容</span>' +
+        '<span class="fr-btns">' +
+          '<button type="button" class="fr-btn" id="frNext">下一个</button>' +
+          '<button type="button" class="fr-btn" id="frReplaceOne">替换</button>' +
+          '<button type="button" class="fr-btn primary" id="frReplaceAll">全部替换</button>' +
+          '<button type="button" class="fr-btn" id="frClose">关闭</button>' +
+        '</span>' +
+      '</div>';
+    document.body.appendChild(panel);
+
+    const $find = panel.querySelector('#frFind');
+    const $replace = panel.querySelector('#frReplace');
+    const $re = panel.querySelector('#frRe');
+    const $count = panel.querySelector('#frCount');
+    let cursor = (typeof editor.selectionStart === 'number') ? editor.selectionStart : 0;
+    let total = 0;
+
+    // 构建正则：空 → null；正则模式非法 → false（文案提示）
+    function buildRegex() {
+      const f = $find.value;
+      if (!f) return null;
+      if ($re.checked) {
+        try { return new RegExp(f, 'g'); } catch (e) { $count.textContent = '正则无效：' + e.message; return false; }
+      }
+      const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(esc, 'g');
     }
-    if (count === 0) { flash('未找到匹配项：' + target); return; }
-    commitText(out, `查找替换（${count} 处）`);
+    function recount() {
+      const re = buildRegex();
+      if (re === false) return;
+      if (!re) { $count.textContent = '输入查找内容'; total = 0; return; }
+      total = (editor.value.match(re) || []).length;
+      $count.textContent = total ? ('找到 ' + total + ' 处') : '未找到匹配';
+    }
+    // 跳到下一处并选中（循环回绕），不修改内容
+    function findNext() {
+      const re = buildRegex(); if (re === false) return;
+      if (!re) { $count.textContent = '请输入查找内容'; return; }
+      const src = editor.value;
+      re.lastIndex = cursor;
+      let m = re.exec(src), wrapped = false;
+      if (!m) { re.lastIndex = 0; m = re.exec(src); wrapped = true; }
+      if (!m) { $count.textContent = '未找到匹配'; return; }
+      editor.focus();
+      editor.setSelectionRange(m.index, m.index + m[0].length);
+      cursor = m.index + m[0].length;
+      $count.textContent = (wrapped ? '已到末尾，回到开头 · ' : '') + '找到 ' + total + ' 处';
+    }
+    // 替换下一处（保留 $1 等反向引用语义）
+    function replaceNext() {
+      const re = buildRegex(); if (re === false) return;
+      if (!re) { $count.textContent = '请输入查找内容'; return; }
+      const src = editor.value;
+      re.lastIndex = cursor;
+      let m = re.exec(src);
+      if (!m) { re.lastIndex = 0; m = re.exec(src); }
+      if (!m) { $count.textContent = '没有可替换的匹配'; return; }
+      const start = m.index, end = start + m[0].length;
+      const single = new RegExp(m[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      const repl = m[0].replace(single, $replace.value);
+      const out = src.slice(0, start) + repl + src.slice(end);
+      cursor = start + repl.length;
+      commitText(out, '查找替换（1 处）');
+      editor.focus();
+      editor.setSelectionRange(cursor, cursor);
+      recount();
+      $count.textContent = '已替换 · 还剩 ' + total + ' 处';
+    }
+    function replaceAll() {
+      const re = buildRegex(); if (re === false) return;
+      if (!re) { $count.textContent = '请输入查找内容'; return; }
+      const src = editor.value;
+      let count = 0;
+      const out = src.replace(re, () => { count++; return $replace.value; });
+      if (count === 0) { $count.textContent = '未找到匹配'; return; }
+      commitText(out, `查找替换（${count} 处）`);
+      $count.textContent = `已替换 ${count} 处`;
+      closePanel();
+    }
+    function closePanel() {
+      panel.remove();
+      document.removeEventListener('keydown', onKey, true);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); closePanel(); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (document.activeElement === $replace) replaceNext();
+        else findNext();
+      }
+    }
+
+    $find.addEventListener('input', recount);
+    $re.addEventListener('change', recount);
+    panel.querySelector('#frNext').addEventListener('click', findNext);
+    panel.querySelector('#frReplaceOne').addEventListener('click', replaceNext);
+    panel.querySelector('#frReplaceAll').addEventListener('click', replaceAll);
+    panel.querySelector('#frClose').addEventListener('click', closePanel);
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => { $find.focus(); }, 0);
   },
 
   // 2. 中英文之间自动加空格（Typographic 美化）
