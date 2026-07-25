@@ -2998,6 +2998,7 @@ async function deleteLibDoc(id) {
 /* 当前文档转存到文库（如从电脑打开的文章） */
 async function addToLibrary() {
   if (currentLibId) { flash('当前已在文档库'); return; }
+  ensureNameFromContent();                                     // 先自动命名（未命名 → 首行派生标题）
   const doc = { id: genId(), name: currentName || '未命名.md', content: editor.value, updatedAt: Date.now(), autoName: currentNameIsAuto };
   try {
     await idbPut(doc);
