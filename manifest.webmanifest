@@ -1,6 +1,6 @@
 {
   "id": "md-editor",
-  "name": "Markdown 编辑器",
+  "name": "雨轩编辑器",
   "short_name": "MD Editor",
   "description": "支持打开 / 保存 / 编辑 / 实时预览的 PWA Markdown 编辑器",
   "start_url": "./index.html",
