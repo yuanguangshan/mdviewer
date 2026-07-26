@@ -1953,6 +1953,48 @@ const AI_ACTIONS = {
       }
     });
   },
+  // 新增：AI 一键生成思维导图 (Mermaid)
+  aiMindmap() {
+    const s = editor.selectionStart, e = editor.selectionEnd;
+    let selected = editor.value.slice(s, e).trim();
+
+    // 未选中文字时，提示输入主题（与 aiGenerate 同风格）
+    if (!selected) {
+      selected = window.prompt('请输入要生成思维导图的主题或杂乱笔记：', '');
+      if (!selected) { toast('已取消', 'info'); return; }
+    }
+
+    aiRunStream({
+      label: 'AI 提炼思维导图',
+      systemPrompt: '你是一个知识提炼与数据可视化专家。请提取用户输入内容的核心逻辑与层级关系，并将其转化为 Mermaid 语法的思维导图（mindmap）。\n要求如下：\n1. 提取出核心主题作为根节点，将相关概念归纳为 2-4 个层级的子节点。\n2. 节点文本必须极度精简（最好不超过 8 个字）。\n3. 严格使用 Mermaid 语法，不要输出任何额外的解释性文字！\n4. 格式范例：\n```mermaid\nmindmap\n  root((核心主题))\n    分支1\n      节点A\n      节点B\n    分支2\n      节点C\n```\n请直接输出包含 ```mermaid 的 Markdown 代码块。',
+      promptText: selected,
+      onApply: (full) => {
+        // 鲁棒提取 Mermaid 代码块：优先匹配 ```mermaid ... ```，否则把整段当 Mermaid 语法
+        let code = '';
+        const m = full.match(/```mermaid\s*\n([\s\S]*?)```/i);
+        if (m) {
+          code = m[1].trim();
+        } else {
+          code = full.replace(/```[a-z]*\s*/gi, '').replace(/```/g, '').trim();
+        }
+        if (!code) { toast('AI 未返回有效 Mermaid 内容', 'err'); return; }
+
+        const block = '```mermaid\n' + code + '\n```';
+        const insertText = '\n\n> 🧠 **AI 知识提炼**\n\n' + block + '\n\n';
+
+        if (e > s) {
+          // 划词触发：追加在选中文字后方（保留原文）
+          editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
+          editor.selectionStart = editor.selectionEnd = e + insertText.length;
+        } else {
+          // 弹窗触发：插入光标处
+          insertAtCursor(insertText);
+        }
+        afterChange();
+        toast('🧠 思维导图已生成，请在右侧预览区查看', 'ok');
+      }
+    });
+  },
   // 打开 AI 设置
   aiSettings() { openAiSettings(); }
 };
