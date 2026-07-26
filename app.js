@@ -3012,6 +3012,20 @@ if ('serviceWorker' in navigator) {
   const db = document.getElementById('updateDismissBtn');
   if (rb) rb.addEventListener('click', doUpdate);
   if (db) db.addEventListener('click', hideUpdateBanner);
+
+  // 根因修复：新 SW 经 skipWaiting + clients.claim 接管页面后，当前页仍在执行
+  // 旧缓存里的 app.js（典型表现：新功能按钮点了「无反应、无报错」——因为旧 app.js
+  // 里根本没有对应 action key，dispatch 的 `if (fn) fn()` 静默 no-op）。
+  // 监听 controllerchange：新 SW 一旦接管即自动重载本页，确保运行的是最新 app.js。
+  // 仅在「本次会话开始前就已有 controller（即旧 SW 控制中）」时才重载，
+  // 避免首次安装并 claim 触发的 controllerchange 误刷新（也避免干扰测试首次加载）。
+  const hadController = !!navigator.serviceWorker.controller;
+  let swReloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swReloading || !hadController) return;
+    swReloading = true;
+    location.reload();
+  });
 }
 
 // === SECTION: 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ===
