@@ -3002,6 +3002,13 @@ if ('serviceWorker' in navigator) {
       });
       // 若注册时已有等待中的 SW（上次部署遗留），直接提示
       if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner();
+
+      // 自愈（根治「已打开的旧标签页永远停在旧版本」）：让长期驻留的标签页也能自动拉取新版本。
+      // reg.update() 只负责「探测到新 SW」，真正重载由下方 controllerchange 守卫触发（带 hadController 防首访误刷、不扰测试）。
+      const pullUpdate = () => { try { reg.update().catch(() => {}); } catch (_) {} };
+      pullUpdate();
+      window.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pullUpdate(); });
+      setInterval(pullUpdate, 60000);
     }).catch(() => {});
   });
 
