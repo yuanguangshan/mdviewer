@@ -112,6 +112,7 @@ if (window.DOMPurify) {
 
 // === SECTION: 音频播放器（mp3 等链接自动渲染为 <audio> + 底部常驻小窗）===
 const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|aac|flac|webm|opus)(\?|#|$)/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?|#|$)/i;
 function filenameFromSrc(src) {
   try {
     const clean = decodeURIComponent(String(src).split('?')[0].split('#')[0]);
@@ -153,6 +154,26 @@ function renderAudioPlayers() {
       audio.dataset.title = (img.getAttribute('alt') || '').trim() || filenameFromSrc(src);
       img.replaceWith(audio);
     }
+  });
+}
+// 裸图片链接自动渲染为 <img>：用户直接粘贴 `https://x.com/a.png`（未写成 ![](...)）
+// 时，marked 会把它当普通链接；这里在渲染后把图片扩展名的 <a> 就地换成 <img>，
+// 与 renderAudioPlayers 同一模式（扫描已渲染 DOM，不改编辑器文本、不动解析器）。
+function renderImageEmbeds() {
+  if (!preview) return;
+  preview.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (href.startsWith('libimg://')) return;       // 本地库图片走原生 ![](libimg://) 渲染，勿动
+    if (!IMAGE_EXT_RE.test(href)) return;
+    if (a.querySelector('img') || a.querySelector('audio')) return;  // 已含媒体的链接不重复处理
+    const img = document.createElement('img');
+    img.src = href;
+    img.alt = ((a.textContent || '').trim() && (a.textContent || '').trim() !== href)
+      ? (a.textContent || '').trim()
+      : filenameFromSrc(href);
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    a.replaceWith(img);
   });
 }
 let activeAudio = null;
@@ -573,6 +594,8 @@ function renderMarkdown() {
   renderMathFormulas();
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
   renderAudioPlayers();
+  // --- 裸图片链接自动渲染为 <img>（见 renderImageEmbeds）---
+  renderImageEmbeds();
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   headingLineMap = buildHeadingMap(editor.value);
   preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
