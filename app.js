@@ -1924,8 +1924,8 @@ function openAiSettings() {
   if (m) m.hidden = false;
 }
 function saveAiSettings() {
-  const ep = $('#aiEndpoint').value.trim() || 'https://api.openai.com/v1/chat/completions';
-  const md = $('#aiModel').value.trim() || 'gpt-4o-mini';
+  const ep = $('#aiEndpoint').value.trim() || 'https://wx.want.biz/v1/chat/completions';
+  const md = $('#aiModel').value.trim() || 'free';
   const key = $('#aiKey').value.trim();
   if (!key) { toast('请填写 API Key', 'err'); return; }
   try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ endpoint: ep, model: md, apiKey: key })); } catch (_) {}
