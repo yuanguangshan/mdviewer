@@ -2512,7 +2512,20 @@ async function syncLibraryToNas() {
   try { authHeader = 'Basic ' + btoa(auth); } catch (_) { return; }
 
   let docs = [];
-  try { docs = await idbGetAll(); } catch (_) { setSyncDot('error', '读取文库失败'); return; }
+  try {
+    if (!libDb) await openLibDb();        // 确保连接已建立（修复启动/空闲回收后 libDb 为 null 直接抛错）
+    docs = await idbGetAll();
+  } catch (_) {
+    // 连接可能已被浏览器关闭（后台回收 / 多标签页 versionchange），重置后重试一次
+    try {
+      libDb = null;
+      await openLibDb();
+      docs = await idbGetAll();
+    } catch (_) {
+      setSyncDot('error', '读取文库失败');
+      return;
+    }
+  }
   const state = loadSyncState();
   const pending = docs.filter((d) => (d.updatedAt || 0) > (state[d.id] || 0));
   if (!pending.length) { setSyncDot('ok', '已是最新'); return; }
