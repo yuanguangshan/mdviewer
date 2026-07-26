@@ -2385,6 +2385,22 @@ async function uploadToNas() {
   const blob = new Blob([editor.value], { type: 'text/markdown' });
   if (blob.size > NAS_MAX_BYTES) { flash('文件超过 200MB 上限，已取消'); return; }
   const name = currentName.replace(/\.(md|markdown|txt|html?|pdf)$/i, '') + '.md';
+  // === 改进 A（简化版）：上传前检测服务端同名文件，预警将被归档覆盖 ===
+  // 服务端在「同名上传」时会把旧版本归档为 <name>_<YYYYMMDD>_<HHMMSS>.md 并用新内容覆盖，
+  // 但上传响应里 saved_as 始终等于原文件名，前端无法从响应判断。故上传前主动 GET 探测同名文件是否存在。
+  // 注意：服务端不支持 HEAD（405），且无时间戳头；GET 仅用于判断存在性，不读取 body。
+  try {
+    const probe = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name), { headers: { 'Authorization': authHeader } });
+    if (probe.status === 200) {
+      const ok = window.confirm(
+        '⚠️ 服务端已存在同名文件「' + name + '」。\n' +
+        '上传后，服务端会把现有版本归档为「' + name + '_<时间戳>.md」，并用当前内容覆盖。\n' +
+        '（归档旧版不会丢失，可手动按归档名下载找回）\n\n' +
+        '点击「确定」继续上传；点击「取消」放弃上传（服务端旧版本保持不变）。'
+      );
+      if (!ok) { flash('已取消上传，服务端旧版本未改动'); return; }
+    }
+  } catch (_) { /* 网络异常时不阻断上传 */ }
   const fd = new FormData();
   fd.append('file', blob, name);
   flash('正在上传到 NAS…');
@@ -2464,6 +2480,23 @@ async function nasOpen(input) {
   if (!filename) { flash('无法解析 NAS 文件名'); return; }
   const text = await downloadFromNas(input);
   if (text == null) return;
+  // === 改进 C：下载前本地改动保护 ===
+  // 若编辑器内已有非空、且与远程不同的内容，直接覆盖会丢失本地改动。
+  const local = editor.value || '';
+  if (local.trim() !== '' && local.trim() !== String(text).trim()) {
+    const ok = window.confirm(
+      '本地编辑器已有未保存的改动，直接下载「' + filename + '」会丢失这些改动！\n' +
+      '点击「确定」：先把本地当前内容备份到本机草稿（localStorage），再下载远程版本。\n' +
+      '点击「取消」：放弃下载，保留本地内容。'
+    );
+    if (!ok) { flash('已取消下载，保留本地内容'); return; }
+    try {
+      const bak = { name: currentName || '未命名草稿', content: local, ts: Date.now() };
+      localStorage.setItem('md-nas-backup-' + bak.ts, JSON.stringify(bak));
+      localStorage.setItem('md-nas-backup-latest', JSON.stringify(bak));
+    } catch (_) {}
+    toast('📌 本地内容已备份到本机草稿（localStorage 的 md-nas-backup-latest），可随时找回', 'info', 6000);
+  }
   currentLibId = null;                 // 脱离文库上下文，作为独立草稿
   currentName = filename;
   currentNameIsAuto = false;
