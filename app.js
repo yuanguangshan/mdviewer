@@ -1932,6 +1932,27 @@ const AI_ACTIONS = {
       onApply: (full) => { insertAtCursor(full + '\n\n'); toast('AI 已生成并插入', 'ok'); }
     });
   },
+  // 策划书籍大纲：基于选中文字（主题/素材）生成结构化大纲，插入光标处
+  aiBookOutline() {
+    const s = editor.selectionStart, e = editor.selectionEnd;
+    const sel = editor.value.slice(s, e);
+    if (!sel.trim()) { toast('请先选中主题或文字', 'err'); return; }
+    aiRunStream({
+      label: 'AI 书籍大纲',
+      systemPrompt: '你是一名资深的图书策划与写作教练。请根据用户给出的主题或素材，策划一份结构清晰、层次分明的书籍大纲（含推荐书名、篇章结构、各章要点），使用 Markdown 格式，只输出大纲正文：',
+      promptText: sel,
+      onApply: (full) => {
+        // 保留选中的主题/素材，把大纲追加在其后（而非覆盖选区）
+        const s = editor.selectionStart, e = editor.selectionEnd;
+        const selText = editor.value.slice(s, e);
+        const insert = selText + '\n\n' + full + '\n\n';
+        editor.value = editor.value.slice(0, s) + insert + editor.value.slice(e);
+        editor.selectionStart = editor.selectionEnd = s + insert.length;
+        afterChange();
+        toast('AI 书籍大纲已生成', 'ok');
+      }
+    });
+  },
   // 打开 AI 设置
   aiSettings() { openAiSettings(); }
 };
