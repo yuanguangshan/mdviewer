@@ -1738,8 +1738,8 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
   opts = opts || {};
   let cfg = readAiConfig();
   let apiKey = cfg.apiKey;
-  const endpoint = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
-  const model = cfg.model || 'gpt-4o-mini';
+  const endpoint = cfg.endpoint || 'https://wx.want.biz/v1/chat/completions';
+  const model = cfg.model || 'free';
   if (!apiKey) {
     apiKey = window.prompt('请输入 AI API Key（OpenAI / DeepSeek / 中转商，仅存本机）：', '');
     if (!apiKey) { toast('未配置 AI Key', 'err'); return null; }
@@ -1917,8 +1917,8 @@ const AI_ACTIONS = {
 function openAiSettings() {
   const cfg = readAiConfig();
   const ep = $('#aiEndpoint'), md = $('#aiModel'), key = $('#aiKey');
-  if (ep) ep.value = cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
-  if (md) md.value = cfg.model || 'gpt-4o-mini';
+  if (ep) ep.value = cfg.endpoint || 'https://wx.want.biz/v1/chat/completions';
+  if (md) md.value = cfg.model || 'free';
   if (key) key.value = cfg.apiKey || '';
   const m = $('#aiSettingsModal');
   if (m) m.hidden = false;
@@ -1938,8 +1938,8 @@ async function testAiConnection() {
   // 优先用表单里当前填写的值（可能还没点保存）
   const epEl = $('#aiEndpoint'), mdEl = $('#aiModel'), keyEl = $('#aiKey');
   const cfg = readAiConfig();
-  const endpoint = (epEl && epEl.value.trim()) || cfg.endpoint || 'https://api.openai.com/v1/chat/completions';
-  const model = (mdEl && mdEl.value.trim()) || cfg.model || 'gpt-4o-mini';
+  const endpoint = (epEl && epEl.value.trim()) || cfg.endpoint || 'https://wx.want.biz/v1/chat/completions';
+  const model = (mdEl && mdEl.value.trim()) || cfg.model || 'free';
   const apiKey = (keyEl && keyEl.value.trim()) || cfg.apiKey || '';
   if (!apiKey) { toast('请先填写 API Key', 'err'); return; }
   toast('正在测试连接…', 'info', 30000);
