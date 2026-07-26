@@ -2937,7 +2937,7 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey) parts.push('mod');
   if (e.altKey) parts.push('alt');
   if (e.shiftKey) parts.push('shift');
-  const k = e.key.toLowerCase();
+  const k = (e.key || '').toLowerCase();
   if (['control', 'meta', 'alt', 'shift', 'tab'].includes(k)) return;   // 忽略纯修饰键 / Tab 由编辑器处理
   parts.push(k);
   const handler = SHORTCUTS.get(parts.join('+'));
@@ -3877,7 +3877,7 @@ function vimKeydown(e) {
   if (e.altKey) return;                  // Alt 组合放行
   // Vim 专用的 Ctrl 组合在此拦截处理；其余 Ctrl（如 Ctrl+S 保存）放行给快捷键系统
   if (e.ctrlKey) {
-    const ck = e.key.toLowerCase();
+    const ck = (e.key || '').toLowerCase();
     if (ck === 'd') { vimMoveByLines(vimHalfPage(), false); finishVimKey(e); return; }
     if (ck === 'u') { vimMoveByLines(-vimHalfPage(), false); finishVimKey(e); return; }
     if (ck === 'm') { vimMoveByLines(1, true); finishVimKey(e); return; }
