@@ -1892,10 +1892,10 @@ function aiProcessSelection(systemPrompt, label) {
   });
 }
 // AI 多平台爆款转写：将选中/输入的素材改写为指定平台风格的爆款文案，流式展示后一键插入。
-// mode: 'xhs' = 小红书风；'twitter' = Twitter Thread 风。
+// mode: 'zhihu' = 知乎体；'twitter' = Twitter Thread 风。
 function aiSocialRewrite(mode) {
-  const isXhs = mode === 'xhs';
-  const label = isXhs ? '小红书爆款' : 'Twitter Thread';
+  const isZhihu = mode === 'zhihu';
+  const label = isZhihu ? '知乎体' : 'Twitter Thread';
   const s = editor.selectionStart, e = editor.selectionEnd;
   let selected = editor.value.slice(s, e).trim();
 
@@ -1905,8 +1905,8 @@ function aiSocialRewrite(mode) {
     if (!selected) { toast('已取消', 'info'); return; }
   }
 
-  const systemPrompt = isXhs
-    ? '你是一名资深的小红书爆款文案操盘手。请将用户提供的素材/草稿，改写为一篇符合小红书生态的爆款笔记：用吸引眼球的标题党式钩子开场；正文多用 emoji 点缀、短句分段、口语化且有共鸣；善用「姐妹们」「真的绝了」「亲测」等平台高频词；结尾加互动引导（如「评论区聊聊～」）并配 3-8 个相关话题标签（#）。保持用户原意，使用 Markdown 格式，只输出笔记正文：'
+  const systemPrompt = isZhihu
+    ? '你是一名在知乎深耕多年的高赞答主。请将用户提供的素材/草稿，改写为一篇符合知乎风格的深度回答：开头直接亮明核心观点（可用「先说结论：」或「谢邀，利益相关：」等知乎经典开场）；正文逻辑清晰、分点论述（用一、二、三或 1. 2. 3. 分层），善用数据、案例与因果推导支撑论点；语言克制理性、不浮夸，重论证而非情绪；结尾可升华主题或给出可落地的建议，并适度抛出开放性问题引导讨论。保持用户原意，使用 Markdown 格式，只输出回答正文：'
     : '你是一名擅长病毒式传播的 Twitter/X 内容策略专家。请将用户提供的素材/草稿，改写为一篇 Twitter Thread：用一条强钩子开场推文；后续每条推文聚焦一个观点、控制在 280 字以内、用数字标号（1/ 2/ 3/ …）分段；语言简洁有力、带观点与数据；结尾加一句总结或行动号召。保持用户原意，使用 Markdown 格式，只输出 Thread 正文：';
 
   aiRunStream({
@@ -1923,7 +1923,7 @@ function aiSocialRewrite(mode) {
         insertAtCursor(insertText);
       }
       afterChange();
-      toast(isXhs ? '📕 小红书爆款已生成，已插入' : '🐦 Twitter Thread 已生成，已插入', 'ok');
+      toast(isZhihu ? '📘 知乎体已生成，已插入' : '🐦 Twitter Thread 已生成，已插入', 'ok');
     }
   });
 }
@@ -2043,8 +2043,8 @@ const AI_ACTIONS = {
   },
   // 打开 AI 设置
   aiSettings() { openAiSettings(); },
-  // AI 多平台爆款转写：小红书风
-  aiRewriteXhs() { aiSocialRewrite('xhs'); },
+  // AI 多平台爆款转写：知乎体
+  aiRewriteZhihu() { aiSocialRewrite('zhihu'); },
   // AI 多平台爆款转写：Twitter Thread 风
   aiRewriteTwitter() { aiSocialRewrite('twitter'); }
 };
