@@ -1891,6 +1891,43 @@ function aiProcessSelection(systemPrompt, label) {
     }
   });
 }
+// AI 多平台爆款转写：将选中/输入的素材改写为指定平台风格的爆款文案，流式展示后一键插入。
+// mode: 'xhs' = 小红书风；'twitter' = Twitter Thread 风。
+function aiSocialRewrite(mode) {
+  const isXhs = mode === 'xhs';
+  const label = isXhs ? '小红书爆款' : 'Twitter Thread';
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  let selected = editor.value.slice(s, e).trim();
+
+  // 未选中文字时，提示输入素材（与 aiGenerate / aiMindmap / aiBookOutline 同风格）
+  if (!selected) {
+    selected = window.prompt(`请输入要转写为${label}的素材或原文：`, '');
+    if (!selected) { toast('已取消', 'info'); return; }
+  }
+
+  const systemPrompt = isXhs
+    ? '你是一名资深的小红书爆款文案操盘手。请将用户提供的素材/草稿，改写为一篇符合小红书生态的爆款笔记：用吸引眼球的标题党式钩子开场；正文多用 emoji 点缀、短句分段、口语化且有共鸣；善用「姐妹们」「真的绝了」「亲测」等平台高频词；结尾加互动引导（如「评论区聊聊～」）并配 3-8 个相关话题标签（#）。保持用户原意，使用 Markdown 格式，只输出笔记正文：'
+    : '你是一名擅长病毒式传播的 Twitter/X 内容策略专家。请将用户提供的素材/草稿，改写为一篇 Twitter Thread：用一条强钩子开场推文；后续每条推文聚焦一个观点、控制在 280 字以内、用数字标号（1/ 2/ 3/ …）分段；语言简洁有力、带观点与数据；结尾加一句总结或行动号召。保持用户原意，使用 Markdown 格式，只输出 Thread 正文：';
+
+  aiRunStream({
+    label: 'AI ' + label,
+    systemPrompt,
+    promptText: selected,
+    onApply: (full) => {
+      // 保留用户原稿：有选区时把爆款文案追加其后，无选区则插入光标处（绝不在回调内二次读 editor.selection*）
+      const insertText = '\n\n' + full.trim() + '\n\n';
+      if (e > s) {
+        editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
+        editor.selectionStart = editor.selectionEnd = e + insertText.length;
+      } else {
+        insertAtCursor(insertText);
+      }
+      afterChange();
+      toast(isXhs ? '📕 小红书爆款已生成，已插入' : '🐦 Twitter Thread 已生成，已插入', 'ok');
+    }
+  });
+}
+
 const AI_ACTIONS = {
   // 全文总结：流式打字机展示，结束后插入文首
   aiSummary() {
@@ -2005,7 +2042,11 @@ const AI_ACTIONS = {
     });
   },
   // 打开 AI 设置
-  aiSettings() { openAiSettings(); }
+  aiSettings() { openAiSettings(); },
+  // AI 多平台爆款转写：小红书风
+  aiRewriteXhs() { aiSocialRewrite('xhs'); },
+  // AI 多平台爆款转写：Twitter Thread 风
+  aiRewriteTwitter() { aiSocialRewrite('twitter'); }
 };
 
 /* AI 设置弹窗（BYOK） */
