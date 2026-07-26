@@ -1933,6 +1933,18 @@ function saveAiSettings() {
   if (m) m.hidden = true;
   toast('AI 配置已保存（仅本机）', 'ok');
 }
+// 恢复默认：误写地址/模型时一键回退到代码默认。API Key 作为本机密钥予以保留（无默认值、不应被清空）；如需更换 Key 请手动改后保存。
+function resetAiSettings() {
+  const cfg = readAiConfig();
+  const defEp = 'https://wx.want.biz/v1/chat/completions';
+  const defMd = 'free';
+  try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ endpoint: defEp, model: defMd, apiKey: cfg.apiKey || '' })); } catch (_) {}
+  const ep = $('#aiEndpoint'), md = $('#aiModel'), key = $('#aiKey');
+  if (ep) ep.value = defEp;
+  if (md) md.value = defMd;
+  if (key) key.value = cfg.apiKey || '';
+  toast('已恢复默认地址/模型，Key 保留', 'ok');
+}
 // 测试 AI 连接：用极小请求验证端点可达 + Key 有效（不插入正文，仅提示结果）
 async function testAiConnection() {
   // 优先用表单里当前填写的值（可能还没点保存）
@@ -1971,6 +1983,7 @@ async function testAiConnection() {
 const aiModal = $('#aiSettingsModal');
 if (aiModal) {
   $('#aiSettingsSave').addEventListener('click', saveAiSettings);
+  $('#aiReset').addEventListener('click', resetAiSettings);
   $('#aiTest').addEventListener('click', testAiConnection);
   $('#aiSettingsCancel').addEventListener('click', () => { aiModal.hidden = true; });
   // 点击遮罩空白处关闭
