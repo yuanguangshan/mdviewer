@@ -1932,24 +1932,33 @@ const AI_ACTIONS = {
       onApply: (full) => { insertAtCursor(full + '\n\n'); toast('AI 已生成并插入', 'ok'); }
     });
   },
-  // 策划书籍大纲：基于选中文字（主题/素材）生成结构化大纲，插入光标处
+  // 策划书籍大纲：基于选中文字（主题/素材）生成结构化大纲，流式展示后一键插入
   aiBookOutline() {
     const s = editor.selectionStart, e = editor.selectionEnd;
-    const sel = editor.value.slice(s, e);
-    if (!sel.trim()) { toast('请先选中主题或文字', 'err'); return; }
+    let selected = editor.value.slice(s, e).trim();
+
+    // 未选中文字时，提示输入主题（与 aiGenerate / aiMindmap 同风格，避免从更多菜单点按直接报错）
+    if (!selected) {
+      selected = window.prompt('请输入要策划书籍大纲的主题或素材：', '');
+      if (!selected) { toast('已取消', 'info'); return; }
+    }
+
     aiRunStream({
       label: 'AI 书籍大纲',
       systemPrompt: '你是一名资深的图书策划与写作教练。请根据用户给出的主题或素材，策划一份结构清晰、层次分明的书籍大纲（含推荐书名、篇章结构、各章要点），使用 Markdown 格式，只输出大纲正文：',
-      promptText: sel,
+      promptText: selected,
       onApply: (full) => {
-        // 保留选中的主题/素材，把大纲追加在其后（而非覆盖选区）
-        const s = editor.selectionStart, e = editor.selectionEnd;
-        const selText = editor.value.slice(s, e);
-        const insert = selText + '\n\n' + full + '\n\n';
-        editor.value = editor.value.slice(0, s) + insert + editor.value.slice(e);
-        editor.selectionStart = editor.selectionEnd = s + insert.length;
+        // 保留选中的主题/素材，把大纲追加在其后（而非覆盖选区）；无选区则插入光标处。
+        // 注意：必须用本函数开头捕获的 s/e，不能在这里重新读 editor.selection*（流式浮层/应用按钮会夺走焦点，导致插入错位）。
+        const insertText = '\n\n' + full.trim() + '\n\n';
+        if (e > s) {
+          editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
+          editor.selectionStart = editor.selectionEnd = e + insertText.length;
+        } else {
+          insertAtCursor(insertText);
+        }
         afterChange();
-        toast('AI 书籍大纲已生成', 'ok');
+        toast('📖 书籍大纲已生成，已插入', 'ok');
       }
     });
   },
