@@ -23,6 +23,27 @@ if (!document.querySelector('#btnMore')) {
   }
 }
 
+// 版本一致性自愈（version-skew self-heal）：
+// index.html 为网络优先、永远新鲜；历史上 app.js/styles.css 为缓存优先(SWR)，
+// SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
+// （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
+// 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
+const APP_VERSION = 'v2.3.18';
+(function versionSkewHeal() {
+  try {
+    const htmlVer = ($('.version') || {}).textContent || '';
+    if (htmlVer && APP_VERSION && htmlVer !== APP_VERSION) {
+      const last = Number(localStorage.getItem(SELFHEAL_KEY) || 0);
+      const now = Date.now();
+      if (now - last > SELFHEAL_COOLDOWN_MS) {
+        localStorage.setItem(SELFHEAL_KEY, String(now));
+        console.warn('[version-skew] html=' + htmlVer + ' app=' + APP_VERSION + ' → 硬刷新拉取一致版本');
+        location.reload(true);
+      }
+    }
+  } catch (_) {}
+})();
+
 /* ===================== SECTION INDEX ===================== */
 // 机器可解析分区标记统一格式： // === SECTION: <标题> ===
 // 提取正则： ^// === SECTION: (.+) ===$
@@ -2053,7 +2074,7 @@ const AI_ACTIONS = {
     const done = writtenChapterNums(doc);
     let target = chapters.find((c) => !done.has(c.num));
     if (!target) {
-      if (chapters.length && aiAutoWrite) {
+      if (chapters.length && (aiAutoWrite || (document.getElementById('aspAuto') || {}).checked)) {
         // 自动模式且全书已写完：停止续写，不弹窗阻塞（取消自动后仍可手动指定重写/加写）
         toast('🎉 全书已写完，自动续写已停止', 'ok');
         setAutoWrite(false);
@@ -2283,7 +2304,8 @@ if (aiStreamPanelEl) {
       const fn = aiStreamApply; aiStreamApply = null;
       fn(aiStreamFull);
     }
-    if (aiAutoWrite) {
+    const autoNow = aiAutoWrite || (aspAutoEl && aspAutoEl.checked);
+    if (autoNow) {
       // 自动续写：面板保持打开，立即生成下一章（全书写完时 aiWriteNextChapter 内部会自动停止）
       AI_ACTIONS.aiWriteNextChapter();
     } else {

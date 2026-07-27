@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v2.3.17';
+const CACHE_NAME = 'md-editor-v2.3.18';
 
 const SHELL = [
   './',
@@ -68,29 +68,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静态资源：缓存优先 + 后台更新（stale-while-revalidate）。
-  // 版本化缓存（CACHE_NAME 随版本号变更），重复打开秒开；后台静默拉取最新，保证发布后不长期陈旧。
+  // 静态资源：网络优先 + 缓存回退（network-first）。
+  // 关键：app.js / styles.css 等必须与 index.html（网络优先）保持同源最新，
+  // 否则 SW 更新过渡期会出现“HTML 新鲜显示新按钮、却运行旧 app.js 逻辑”的版本错配
+  // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
+  // 改为网络优先：发布后首次打开即拉到最新；离线时回退到已缓存副本（首装后离线可用）。
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(req);
-    const network = fetch(req).then(async (fresh) => {
+    try {
+      const fresh = await fetch(req);
       if (fresh && (fresh.ok || fresh.type === 'opaque')) {
         try { await cache.put(req, fresh.clone()); } catch (_) {}
       }
       return fresh;
-    }).catch(() => null);
-    if (cached) {
-      // 命中缓存立即返回，后台更新（不阻塞）
-      network.catch(() => {});
-      return cached;
+    } catch {
+      // 离线或网络失败：回退到缓存
+      const cached = await cache.match(req);
+      if (cached) return cached;
+      if (url.pathname.endsWith('.png')) {
+        const fallback = await cache.match('./icons/icon-192.png');
+        if (fallback) return fallback;
+      }
+      return Response.error();
     }
-    const fresh = await network;
-    if (fresh) return fresh;
-    // 离线回退
-    if (url.pathname.endsWith('.png')) {
-      const fallback = await cache.match('./icons/icon-192.png');
-      if (fallback) return fallback;
-    }
-    return Response.error();
   })());
 });
