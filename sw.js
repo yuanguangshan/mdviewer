@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v3.0.1';
+const CACHE_NAME = 'md-editor-v3.0.2';
 
 const SHELL = [
   './',
@@ -38,7 +38,7 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-/* ---------- 请求拦截 ---------- */
+/* ---------- 请求拦截：缓存优先（cache-first）+ 后台更新 ---------- */
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
@@ -50,31 +50,24 @@ self.addEventListener('fetch', (event) => {
   // 直接透传、不缓存。
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  // 导航请求（打开页面）：网络优先，失败回退到缓存的 index.html
-  if (req.mode === 'navigate') {
-    event.respondWith((async () => {
-      try {
-        const fresh = await fetch(req);
-        const cache = await caches.open(CACHE_NAME);
-        try { await cache.put('./index.html', fresh.clone()); } catch (_) {}
-        return fresh;
-      } catch {
-        const cache = await caches.open(CACHE_NAME);
-        return (await cache.match('./index.html')) ||
-               (await cache.match('./')) ||
-               Response.error();
-      }
-    })());
-    return;
-  }
-
-  // 静态资源：网络优先 + 缓存回退（network-first）。
-  // 关键：app.js / styles.css 等必须与 index.html（网络优先）保持同源最新，
-  // 否则 SW 更新过渡期会出现“HTML 新鲜显示新按钮、却运行旧 app.js 逻辑”的版本错配
-  // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
-  // 改为网络优先：发布后首次打开即拉到最新；离线时回退到已缓存副本（首装后离线可用）。
+  // 缓存优先：命中缓存即直接返回（首屏快、离线可用），
+  // 同时后台用网络响应刷新缓存（stale-while-revalidate）；
+  // 未命中再走网络并写入缓存，供下次秒开/离线使用。
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(req);
+    if (cached) {
+      const revalidate = async () => {
+        try {
+          const fresh = await fetch(req);
+          if (fresh && (fresh.ok || fresh.type === 'opaque')) {
+            try { await cache.put(req, fresh.clone()); } catch (_) {}
+          }
+        } catch (_) {}
+      };
+      revalidate();
+      return cached;
+    }
     try {
       const fresh = await fetch(req);
       if (fresh && (fresh.ok || fresh.type === 'opaque')) {
@@ -82,12 +75,14 @@ self.addEventListener('fetch', (event) => {
       }
       return fresh;
     } catch {
-      // 离线或网络失败：回退到缓存
-      const cached = await cache.match(req);
-      if (cached) return cached;
+      // 离线且未命中：导航回退缓存 index.html；图片回退默认图标
+      if (req.mode === 'navigate') {
+        const fb = (await cache.match('./index.html')) || (await cache.match('./'));
+        if (fb) return fb;
+      }
       if (url.pathname.endsWith('.png')) {
-        const fallback = await cache.match('./icons/icon-192.png');
-        if (fallback) return fallback;
+        const fb = await cache.match('./icons/icon-192.png');
+        if (fb) return fb;
       }
       return Response.error();
     }

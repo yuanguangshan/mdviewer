@@ -8,98 +8,11 @@ const gutter = $('#gutter');
 const editorHighlight = $('#editorHighlight');
 const fileInput = $('#fileInput');
 
-// ============ 自动重载熔断守卫（防无限刷新死循环） ============
-// 根因：v2.3.18 的版本一致性自愈 + v2.3.9 的 controllerchange 重载，
-// 当运行中的 app.js 因网络/缓存原因始终拿不到与新 HTML 一致的版本时，
-// 会反复硬刷新且永远收敛不了 —— 用户表现为「一直刷新、点不了、更新条常驻」。
-// 对策：所有自动重载统一走 autoReload()，在 2 分钟窗口内最多自动刷新 N 次；
-// 超限即停止自动刷新，转「清除缓存并重试」恢复横幅，把控制权交还用户。
-const RELOAD_GUARD_KEY = 'md-autoreload-log';
-const RELOAD_GUARD_MAX = 4;            // 窗口内最多自动重载次数
-const RELOAD_GUARD_WINDOW = 120000;    // 2 分钟
-
-// 清掉我们的 SW 外壳缓存（不含 IndexedDB 里的图片/文库），强制下次走网络拉最新代码
-function clearAppCaches() {
-  return new Promise((resolve) => {
-    if (!('caches' in window)) return resolve();
-    caches.keys().then((keys) =>
-      Promise.all(keys.map((k) => caches.delete(k).catch(() => {})))
-    ).then(() => resolve()).catch(() => resolve());
-  });
-}
-
-function showReloadRecovery() {
-  const banner = document.getElementById('updateBanner');
-  if (!banner) return;
-  const txt = banner.querySelector('.update-text');
-  if (txt) txt.textContent = '⚠️ 自动更新未能完成（可能网络不稳定或缓存未刷新）。可点「清除缓存并重试」，或稍后手动刷新。';
-  const rb = document.getElementById('updateReloadBtn');
-  if (rb) {
-    rb.textContent = '清除缓存并重试';
-    rb.onclick = () => { clearAppCaches().then(() => location.reload(true)).catch(() => location.reload(true)); };
-  }
-  banner.hidden = false;
-}
-
-function autoReload(reason, opts) {
-  opts = opts || {};
-  try {
-    const now = Date.now();
-    let log = [];
-    try { log = JSON.parse(localStorage.getItem(RELOAD_GUARD_KEY) || '[]'); } catch (_) {}
-    log = log.filter((t) => now - t < RELOAD_GUARD_WINDOW);
-    if (log.length >= RELOAD_GUARD_MAX) {
-      console.warn('[auto-reload] 已达上限（' + RELOAD_GUARD_MAX + ' 次/' + (RELOAD_GUARD_WINDOW / 1000) + 's），停止自动刷新，转人工恢复：' + reason);
-      showReloadRecovery();
-      return;
-    }
-    log.push(now);
-    localStorage.setItem(RELOAD_GUARD_KEY, JSON.stringify(log));
-  } catch (_) {}
-  console.warn('[auto-reload] ' + reason);
-  // 版本错配：先清可能陈旧的 app.js/styles.css/index.html 缓存，强制网络拉最新，
-  // 打破「旧 app.js 反复被 SW 喂给页面」的死循环
-  if (opts.bustCache) {
-    clearAppCaches().then(() => location.reload(true)).catch(() => location.reload(true));
-  } else {
-    location.reload(true);
-  }
-}
-
-// 仅供自动化回归测试（test_reload_breaker.cjs）驱动熔断守卫与恢复横幅使用
-window.__mdDebug = { autoReload: autoReload, showReloadRecovery: showReloadRecovery };
-
-// 自愈守卫：关键按钮（#btnMore）缺失 = SW 更新过渡期 HTML/JS 版本错配。
-// 旧版用 sessionStorage 仅限一次刷新，若错配持续（SW 一直没切到新版本）则无能为力；
-// 改为 localStorage + 时间戳，60s 冷却窗口内最多自愈一次：既防刷新死循环，
-// 又允许错配持续时在下个冷却窗口重新拉取一致版本。
-const SELFHEAL_KEY = 'md-selfheal-ts';
-const SELFHEAL_COOLDOWN_MS = 60 * 1000;
-if (!document.querySelector('#btnMore')) {
-  const last = Number(localStorage.getItem(SELFHEAL_KEY) || 0);
-  const now = Date.now();
-  if (now - last > SELFHEAL_COOLDOWN_MS) {
-    localStorage.setItem(SELFHEAL_KEY, String(now));
-    autoReload('btnMore-missing');
-  }
-}
-
-// 版本一致性自愈（version-skew self-heal）：
-// index.html 为网络优先、永远新鲜；历史上 app.js/styles.css 为缓存优先(SWR)，
-// SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
-// （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
-// 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v3.0.1';
-(function versionSkewHeal() {
-  try {
-    const htmlVer = ($('.version') || {}).textContent || '';
-    if (htmlVer && APP_VERSION && htmlVer !== APP_VERSION) {
-      console.warn('[version-skew] html=' + htmlVer + ' app=' + APP_VERSION + ' → 拉取一致版本');
-      // 熔断守卫统一控频：超限即停止自动刷新并给出人工恢复入口
-      autoReload('version-skew', { bustCache: true });
-    }
-  } catch (_) {}
-})();
+// ============ 版本更新：手动模式 ============
+// 检测到新 SW 后仅弹出「更新条」提示，由用户点击「立即刷新」主动重载；
+// 不自动 location.reload()，回到部署体验更好、无刷新死循环的手动模式。
+// 配套 SW 策略为「缓存优先 + 后台更新」（见 sw.js），离线/秒开友好，
+// 用户主动刷新即拉取并应用新版本。
 
 /* ===================== SECTION INDEX ===================== */
 // 机器可解析分区标记统一格式： // === SECTION: <标题> ===
@@ -3548,8 +3461,8 @@ if ('serviceWorker' in navigator) {
       // 若注册时已有等待中的 SW（上次部署遗留），直接提示
       if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner();
 
-      // 自愈（根治「已打开的旧标签页永远停在旧版本」）：让长期驻留的标签页也能自动拉取新版本。
-      // reg.update() 只负责「探测到新 SW」，真正重载由下方 controllerchange 守卫触发（带 hadController 防首访误刷、不扰测试）。
+      // 后台探测新版本：长期驻留的标签页也能及时发现部署更新并弹出更新条
+      // （仅提示，不自动刷新；用户主动点击「立即刷新」才重载）。
       const pullUpdate = () => { try { reg.update().catch(() => {}); } catch (_) {} };
       pullUpdate();
       window.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pullUpdate(); });
@@ -3562,22 +3475,12 @@ if ('serviceWorker' in navigator) {
   const doUpdate = () => { location.reload(); };
   const rb = document.getElementById('updateReloadBtn');
   const db = document.getElementById('updateDismissBtn');
-  if (rb) rb.onclick = doUpdate;   // 用 onclick 便于恢复态覆写为「清除缓存并重试」
+  if (rb) rb.onclick = doUpdate;
   if (db) db.onclick = hideUpdateBanner;
 
-  // 根因修复：新 SW 经 skipWaiting + clients.claim 接管页面后，当前页仍在执行
-  // 旧缓存里的 app.js（典型表现：新功能按钮点了「无反应、无报错」——因为旧 app.js
-  // 里根本没有对应 action key，dispatch 的 `if (fn) fn()` 静默 no-op）。
-  // 监听 controllerchange：新 SW 一旦接管即自动重载本页，确保运行的是最新 app.js。
-  // 仅在「本次会话开始前就已有 controller（即旧 SW 控制中）」时才重载，
-  // 避免首次安装并 claim 触发的 controllerchange 误刷新（也避免干扰测试首次加载）。
-  const hadController = !!navigator.serviceWorker.controller;
-  let swReloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (swReloading || !hadController) return;
-    swReloading = true;
-    autoReload('controllerchange');
-  });
+  // 手动模式：新 SW 经 skipWaiting + clients.claim 接管后，不自动重载本页，
+  // 避免自动刷新死循环。用户主动点击「立即刷新」(doUpdate) 才 location.reload()，
+  // 由已就绪的新 SW 提供最新 app.js / index.html。
 }
 
 // === SECTION: 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ===
