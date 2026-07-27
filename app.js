@@ -3481,7 +3481,8 @@ if ('serviceWorker' in navigator) {
         newWorker.addEventListener('statechange', () => {
           // installed 且存在旧 SW 控制页面 → 说明有可用更新
           if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            try { sessionStorage.removeItem(SW_DISMISSED); } catch (_) {} // 新部署：允许再次提示
+            // 不清除 SW_DISMISSED：本会话点过「立即刷新 / ✕」就不再因 updatefound 反复弹；
+            // sessionStorage 为会话级，关闭标签页后下个会话自然恢复提示能力。
             showUpdateBanner();
           }
         });
@@ -3504,23 +3505,22 @@ if ('serviceWorker' in navigator) {
   const doUpdate = () => {
     try { sessionStorage.setItem(SW_DISMISSED, '1'); } catch (_) {}
     const sw = navigator.serviceWorker;
-    if (sw && sw.getRegistration) {
-      sw.getRegistration().then((reg) => {
-        const reload = () => location.reload();
-        if (reg && reg.waiting) {
-          let fired = false;
-          reg.waiting.addEventListener('statechange', () => {
-            if (!fired && reg.waiting && reg.waiting.state === 'activated') { fired = true; reload(); }
-          });
-          try { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (_) {}
-          setTimeout(reload, 1200);
-        } else {
-          reload();
-        }
-      }).catch(() => location.reload());
-    } else {
-      location.reload();
-    }
+    const reload = () => location.reload();
+    if (!sw || !sw.getRegistration) { reload(); return; }
+    sw.getRegistration().then((reg) => {
+      if (reg && reg.waiting) {
+        // 新 SW 处于 waiting：通知其立即激活；监听 controllerchange（新 SW 经 claim 真正接管
+        // 页面后触发）再 reload 最稳。切勿监听 reg.waiting.statechange——worker 一旦 activated，
+        // reg.waiting 即变为 null，回调里读不到 'activated' 状态，刷新逻辑会失效（旧版 bug）。
+        let done = false;
+        const go = () => { if (!done) { done = true; reload(); } };
+        sw.addEventListener('controllerchange', go);
+        try { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (_) {}
+        setTimeout(go, 1500);   // 兜底：极少数情况 claim 不及时
+      } else {
+        reload();   // 无 waiting（已是最新 SW）：直接刷新
+      }
+    }).catch(reload);
   };
   const rb = document.getElementById('updateReloadBtn');
   const db = document.getElementById('updateDismissBtn');

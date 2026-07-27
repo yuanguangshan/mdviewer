@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v3.0.6';
+const CACHE_NAME = 'md-editor-v3.0.7';
 
 const SHELL = [
   './',
@@ -18,7 +18,11 @@ const SHELL = [
   // 改为运行时按需懒加载（见 app.js loadScript），不纳入预缓存，避免安装即下载 4MB+。
 ];
 
-/* ---------- 安装：预缓存完整应用外壳（best-effort，单文件失败不阻断） ---------- */
+/* ---------- 安装：预缓存完整应用外壳（best-effort，单文件失败不阻断） ----------
+   ⚠ 此处【不】调用 skipWaiting()：新版本 SW 安装后停留在 waiting，等用户点击
+   「立即刷新」时由页面 postMessage('SKIP_WAITING') 显式激活（见下方 message 事件）。
+   若在 install 里自动 skipWaiting，会与新 SW 的 clients.claim() 产生竞争——页面
+   仍在旧 SW 控制下 reload，导致「更新条点击无反应、刷新后反复弹出」。 */
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -29,7 +33,6 @@ self.addEventListener('install', (event) => {
         if (res && (res.ok || res.type === 'opaque')) await cache.put(u, res);
       } catch (_) { /* 单文件失败忽略，运行时仍可降级 */ }
     }));
-    await self.skipWaiting();
   })());
 });
 
