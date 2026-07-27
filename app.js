@@ -1843,6 +1843,8 @@ async function callAiApi(promptText, systemPrompt) {
 let aiStreamAbort = null;   // 当前流式请求的 AbortController
 let aiStreamApply = null;   // 完成后的"应用"回调
 let aiStreamFull = '';      // 已生成全文
+let aiAutoWrite = false;    // 「🔁 自动续写」开关：开启后每章应用即自动续写下一章，面板常显
+function setAutoWrite(on) { aiAutoWrite = !!on; const cb = document.getElementById('aspAuto'); if (cb) cb.checked = aiAutoWrite; }
 
 // 打开浮层并发起流式请求；文本实时追加到面板，点"应用"时调用 onApply(full)
 function aiRunStream({ label, systemPrompt, promptText, onApply }) {
@@ -2051,6 +2053,13 @@ const AI_ACTIONS = {
     const done = writtenChapterNums(doc);
     let target = chapters.find((c) => !done.has(c.num));
     if (!target) {
+      if (chapters.length && aiAutoWrite) {
+        // 自动模式且全书已写完：停止续写，不弹窗阻塞（取消自动后仍可手动指定重写/加写）
+        toast('🎉 全书已写完，自动续写已停止', 'ok');
+        setAutoWrite(false);
+        const p = document.getElementById('aiStreamPanel'); if (p) p.hidden = true;
+        return;
+      }
       // 大纲解析不到章节，或全部写完 → 弹窗手动指定（与 aiGenerate 同风格）
       const hint = chapters.length
         ? '大纲中的章节均已写完。如需重写/加写，请输入章节（如：第4章 XXX）：'
@@ -2085,7 +2094,13 @@ const AI_ACTIONS = {
 
     aiRunStream({
       label: 'AI 续写 ' + chapLabel,
-      systemPrompt: '你是一名专业作家，正在按既定大纲撰写一本书。请只撰写用户指定的这一章正文：以「## ' + chapLabel + '」这样的二级标题开头；内容充实、行文与上一章自然衔接；篇幅约 2000-3000 字；写完本章即停——不要写下一章、不要复述大纲、不要输出任何解释。使用 Markdown 格式，只输出本章正文：',
+      systemPrompt: '你是一名有个人风格、有血有肉的专业作家，正在按既定大纲撰写一本书。请只撰写用户指定的这一章正文：\n' +
+        '· 以「## ' + chapLabel + '」这样的二级标题开头；内容充实、行文与上一章自然衔接；篇幅约 2000-3000 字。\n' +
+        '· 写完本章即停——不要写下一章、不要复述大纲、不要输出任何解释。\n' +
+        '· 反共识：每章至少包含一处与主流认知相悖的「个人观察」，单独成段并以「> 💡 独思时刻：」开头，须基于真实或可信的具体场景，避免泛泛而谈。\n' +
+        '· 去套话：严禁使用「降维打击」「赋能」「范式转移」「底层逻辑」「超级个体」「终极壁垒」「认知升维」等空洞词汇，改用具体、有画面感的表述。\n' +
+        '· 具体化：每个抽象观点都必须配一个不超过 30 字、含具体时间/地点/人物或事件的微型故事，给读者真实的「肉身感」。\n' +
+        '使用 Markdown 格式，只输出本章正文：',
       promptText,
       onApply: (full) => {
         // 隐形进度标记 + 章正文，统一追加到文档末尾（标记在预览中不可见）
@@ -2255,25 +2270,35 @@ if (blogPublishModal) {
 }
 }
 
-/* AI 流式打字机浮层按钮：应用 / 取消 / 停止 */
+/* AI 流式打字机浮层按钮：应用 / 取消 / 停止 / 自动续写开关 */
 const aiStreamPanelEl = document.getElementById('aiStreamPanel');
 if (aiStreamPanelEl) {
+  // 🔁 自动续写开关：勾选后，每章"应用"即自动续写下一章，面板保持常显
+  const aspAutoEl = document.getElementById('aspAuto');
+  if (aspAutoEl) aspAutoEl.addEventListener('change', () => { aiAutoWrite = aspAutoEl.checked; });
+
   document.getElementById('aspApply').addEventListener('click', () => {
     if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
     if (aiStreamApply) {
       const fn = aiStreamApply; aiStreamApply = null;
       fn(aiStreamFull);
     }
-    aiStreamPanelEl.hidden = true;
+    if (aiAutoWrite) {
+      // 自动续写：面板保持打开，立即生成下一章（全书写完时 aiWriteNextChapter 内部会自动停止）
+      AI_ACTIONS.aiWriteNextChapter();
+    } else {
+      aiStreamPanelEl.hidden = true;
+    }
   });
   document.getElementById('aspCancel').addEventListener('click', () => {
     if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
     aiStreamApply = null;
+    setAutoWrite(false);
     aiStreamPanelEl.hidden = true;
   });
   document.getElementById('aspStop').addEventListener('click', () => {
     if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
-    // 停止后保留已生成内容，应用按钮仍可用
+    // 停止后保留已生成内容，应用按钮仍可用；自动续写保持武装（应用该章后仍会继续）
   });
 }
 
