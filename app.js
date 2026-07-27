@@ -2018,12 +2018,14 @@ const AI_ACTIONS = {
 
     aiRunStream({
       label: 'AI 书籍大纲',
-      systemPrompt: '你是一名资深的图书策划与写作教练。请根据用户给出的主题或素材，策划一份结构清晰、层次分明的书籍大纲（含推荐书名、篇章结构、各章要点），使用 Markdown 格式，只输出大纲正文：',
+      systemPrompt: '你是一名资深的图书策划与写作教练。请根据用户给出的主题或素材，策划一份结构清晰、层次分明的书籍大纲（含推荐书名、篇章结构、各章要点）。硬性格式要求：每一章的标题必须单独成行，且严格使用「## 第X章：章名」的格式（X 用一、二、三…中文数字），章内要点用列表；这是后续 AI 逐章续写功能解析章节的依据，不得使用其他章标题写法。使用 Markdown 格式，只输出大纲正文：',
       promptText: selected,
       onApply: (full) => {
         // 保留选中的主题/素材，把大纲追加在其后（而非覆盖选区）；无选区则插入光标处。
         // 注意：必须用本函数开头捕获的 s/e，不能在这里重新读 editor.selection*（流式浮层/应用按钮会夺走焦点，导致插入错位）。
-        const insertText = '\n\n' + full.trim() + '\n\n';
+        // 末尾追加 <!-- ai-chapter:0 --> 大纲结束锚点：显式划分“大纲区/正文区”，
+        // 防止用户手写正文中出现的「第X章」被 aiWriteNextChapter 误当成大纲章节。
+        const insertText = '\n\n' + full.trim() + '\n\n<!-- ai-chapter:0 -->\n\n';
         if (e > s) {
           editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
           editor.selectionStart = editor.selectionEnd = e + insertText.length;
@@ -2056,7 +2058,8 @@ const AI_ACTIONS = {
       const input = window.prompt(hint, '');
       if (!input || !input.trim()) { toast('已取消', 'info'); return; }
       const parsed = parseChapterList(input.trim());
-      target = parsed[0] || { num: (done.size || 0) + 1, title: input.trim() };
+      // 兜底章号 = 已写最大章号 + 1（不能用 done.size：锚点 0 也在集合里，会数偏）
+      target = parsed[0] || { num: Math.max(0, ...done) + 1, title: input.trim() };
     }
 
     // ③ 本章大纲要点 = 大纲中本章行到下一章行之间的内容
@@ -2068,9 +2071,11 @@ const AI_ACTIONS = {
       points = outlinePart.slice(from, to).trim().slice(0, 1200);
     }
 
-    // ④ 上一章结尾 ~1500 字（保证衔接）；无已写章节则跳过
+    // ④ 上一章结尾 ~1500 字（保证衔接）；仅当已写过编号≥1的正文章节才带。
+    // 不能用 firstMark !== -1 判断：大纲结束锚点 ai-chapter:0 也会命中 firstMark，
+    // 若据此把文档尾部（= 大纲本身）当“上一章结尾”传给 AI，会污染首章上下文。
     let prevTail = '';
-    if (firstMark !== -1) prevTail = doc.slice(-1500).trim();
+    if (/<!--\s*ai-chapter:[1-9]\d*\s*-->/.test(doc)) prevTail = doc.slice(-1500).trim();
 
     const chapLabel = '第' + target.num + '章' + (target.title ? ' ' + target.title : '');
     const promptText = '【全书大纲】\n' + outlinePart.trim().slice(0, 4000) +
