@@ -1928,6 +1928,42 @@ function aiSocialRewrite(mode) {
   });
 }
 
+// ===== AI 逐章写作：参照文档中的书籍大纲，一章一章自动续写 =====
+// 中文数字 → 阿拉伯数字（支持 一~九百九十九 与纯数字，如 十=10、二十三=23、一百零五=105）
+function cnChapterNum(s) {
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  const d = { '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+  let n = 0;
+  if (s.includes('百')) { const p = s.split('百'); n += (d[p[0]] || 1) * 100; s = (p[1] || '').replace(/^零/, ''); }
+  if (s.includes('十')) { const p = s.split('十'); n += (d[p[0]] || 1) * 10; s = p[1] || ''; }
+  if (s) n += d[s] || 0;
+  return n > 0 ? n : null;
+}
+
+// 从大纲文本解析章节列表：匹配「第X章」行（容忍 ##/-/1. 等前缀与 **粗体** 装饰），按章号去重排序
+function parseChapterList(text) {
+  const re = /^[^\n]{0,24}?第([一二两三四五六七八九十百零\d]+)章[\s:：·、.．\-—]*([^\n]*)$/gm;
+  const seen = new Set(); const list = [];
+  let m;
+  while ((m = re.exec(text))) {
+    const num = cnChapterNum(m[1]);
+    if (!num || seen.has(num)) continue;
+    seen.add(num);
+    const title = (m[2] || '').replace(/[*_`#]/g, '').replace(/[（(][^）)]*[）)]/g, '').trim();
+    list.push({ num, title, at: m.index });
+  }
+  return list.sort((a, b) => a.num - b.num);
+}
+
+// 已写章节进度：靠生成时插入的 <!-- ai-chapter:N --> 隐形标记判断（预览中不可见；删掉整章即可重写该章）
+function writtenChapterNums(text) {
+  const nums = new Set();
+  const re = /<!--\s*ai-chapter:(\d+)\s*-->/g;
+  let m;
+  while ((m = re.exec(text))) nums.add(parseInt(m[1], 10));
+  return nums;
+}
+
 const AI_ACTIONS = {
   // 全文总结：流式打字机展示，结束后插入文首
   aiSummary() {
@@ -1996,6 +2032,64 @@ const AI_ACTIONS = {
         }
         afterChange();
         toast('📖 书籍大纲已生成，已插入', 'ok');
+      }
+    });
+  },
+  // 逐章写作：自动检测「下一个未写的章」，参照大纲 + 上一章结尾续写，追加到文档末尾
+  aiWriteNextChapter() {
+    const doc = editor.value;
+    if (!doc.trim()) { toast('文档为空，请先用「📖 策划书籍大纲」生成大纲', 'err'); return; }
+
+    // ① 大纲区 = 第一个章节标记之前的部分（尚未写正文时即全文）
+    const firstMark = doc.search(/<!--\s*ai-chapter:\d+\s*-->/);
+    const outlinePart = firstMark === -1 ? doc : doc.slice(0, firstMark);
+    const chapters = parseChapterList(outlinePart);
+
+    // ② 找下一个未写的章
+    const done = writtenChapterNums(doc);
+    let target = chapters.find((c) => !done.has(c.num));
+    if (!target) {
+      // 大纲解析不到章节，或全部写完 → 弹窗手动指定（与 aiGenerate 同风格）
+      const hint = chapters.length
+        ? '大纲中的章节均已写完。如需重写/加写，请输入章节（如：第4章 XXX）：'
+        : '未能从文档中识别出「第X章」大纲。请输入要写的章节（如：第1章 XXX）：';
+      const input = window.prompt(hint, '');
+      if (!input || !input.trim()) { toast('已取消', 'info'); return; }
+      const parsed = parseChapterList(input.trim());
+      target = parsed[0] || { num: (done.size || 0) + 1, title: input.trim() };
+    }
+
+    // ③ 本章大纲要点 = 大纲中本章行到下一章行之间的内容
+    let points = '';
+    const idx = chapters.findIndex((c) => c.num === target.num);
+    if (idx !== -1) {
+      const from = chapters[idx].at;
+      const to = idx + 1 < chapters.length ? chapters[idx + 1].at : outlinePart.length;
+      points = outlinePart.slice(from, to).trim().slice(0, 1200);
+    }
+
+    // ④ 上一章结尾 ~1500 字（保证衔接）；无已写章节则跳过
+    let prevTail = '';
+    if (firstMark !== -1) prevTail = doc.slice(-1500).trim();
+
+    const chapLabel = '第' + target.num + '章' + (target.title ? ' ' + target.title : '');
+    const promptText = '【全书大纲】\n' + outlinePart.trim().slice(0, 4000) +
+      (prevTail ? '\n\n【上一章结尾（仅供衔接，不要复述）】\n' + prevTail : '') +
+      (points ? '\n\n【本章大纲要点】\n' + points : '') +
+      '\n\n【任务】请撰写：' + chapLabel;
+
+    aiRunStream({
+      label: 'AI 续写 ' + chapLabel,
+      systemPrompt: '你是一名专业作家，正在按既定大纲撰写一本书。请只撰写用户指定的这一章正文：以「## ' + chapLabel + '」这样的二级标题开头；内容充实、行文与上一章自然衔接；篇幅约 2000-3000 字；写完本章即停——不要写下一章、不要复述大纲、不要输出任何解释。使用 Markdown 格式，只输出本章正文：',
+      promptText,
+      onApply: (full) => {
+        // 隐形进度标记 + 章正文，统一追加到文档末尾（标记在预览中不可见）
+        const insertText = '\n\n<!-- ai-chapter:' + target.num + ' -->\n\n' + full.trim() + '\n';
+        editor.value = editor.value.replace(/\s*$/, '') + insertText;
+        editor.selectionStart = editor.selectionEnd = editor.value.length;
+        afterChange();
+        editor.scrollTop = editor.scrollHeight;
+        toast('✍️ ' + chapLabel + ' 已写完并追加到文末', 'ok');
       }
     });
   },

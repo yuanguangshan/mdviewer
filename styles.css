@@ -243,7 +243,7 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 
 /* ---------- 选中文字后的浮动 AI 气泡菜单 ---------- */
 .floating-toolbar {
-  position: fixed; z-index: 9998; display: flex; gap: 2px; padding: 4px;
+  position: fixed; z-index: 9998; display: flex; flex-wrap: wrap; max-width: min(92vw, 540px); gap: 2px; padding: 4px;
   background: rgba(28, 30, 38, .72);
   -webkit-backdrop-filter: saturate(180%) blur(14px);
   backdrop-filter: saturate(180%) blur(14px);
