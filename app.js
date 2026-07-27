@@ -28,7 +28,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v2.3.21';
+const APP_VERSION = 'v2.3.22';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
@@ -1568,6 +1568,50 @@ const TEXT_ACTIONS = {
       total = (editor.value.match(re) || []).length;
       $count.textContent = total ? ('找到 ' + total + ' 处') : '未找到匹配';
     }
+    // 等宽字体单字符宽度（缓存，避免每次查找都建 DOM）
+    let _charW = 0;
+    function measureCharWidth(cs) {
+      if (_charW) return _charW;
+      const span = document.createElement('span');
+      span.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+      span.style.fontFamily = cs.fontFamily;
+      span.style.fontSize = cs.fontSize;
+      span.style.fontWeight = cs.fontWeight;
+      span.style.letterSpacing = cs.letterSpacing;
+      span.textContent = '0'.repeat(80);
+      document.body.appendChild(span);
+      _charW = span.getBoundingClientRect().width / 80 || 9;
+      span.remove();
+      return _charW;
+    }
+    // 显式把匹配位置滚入可视区：setSelectionRange 在 wrap=off 长文档下纵向滚动不可靠，
+    // 这里直接按「行/列」算 scrollTop/scrollLeft 兜底，保证关键词始终在屏幕内（覆盖层同步跟随）。
+    function revealMatch(start) {
+      const before = editor.value.slice(0, start);
+      const lines = before.split('\n');
+      const line = lines.length - 1;
+      const col = lines[line].length;
+      const cs = getComputedStyle(editor);
+      const lh = parseFloat(cs.lineHeight) || 25;
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padLeft = parseFloat(cs.paddingLeft) || 0;
+      const lineY = line * lh + padTop;                       // 该行顶部 Y（相对内容）
+      const viewTop = editor.scrollTop;
+      const viewBottom = viewTop + editor.clientHeight;
+      if (lineY < viewTop || lineY + lh > viewBottom) {
+        editor.scrollTop = Math.max(0, lineY - editor.clientHeight / 3);
+      }
+      if (!wrapMode) {                                        // 不换行：横向也可能超出，按列滚动
+        const cw = measureCharWidth(cs);
+        const charX = col * cw + padLeft;
+        const viewLeft = editor.scrollLeft;
+        const viewRight = viewLeft + editor.clientWidth;
+        if (charX < viewLeft || charX + cw > viewRight) {
+          editor.scrollLeft = Math.max(0, charX - editor.clientWidth / 3);
+        }
+      }
+      syncHighlightScroll();
+    }
     // 跳到下一处并选中（循环回绕），不修改内容
     function findNext() {
       const re = buildRegex(); if (re === false) return;
@@ -1579,6 +1623,7 @@ const TEXT_ACTIONS = {
       if (!m) { $count.textContent = '未找到匹配'; return; }
       editor.focus();
       editor.setSelectionRange(m.index, m.index + m[0].length);
+      revealMatch(m.index);
       cursor = m.index + (m[0].length || 1);   // 零宽断言（^ $ \b）length=0，兜底 +1 防原地死循环
       $count.textContent = (wrapped ? '已到末尾，回到开头 · ' : '') + '找到 ' + total + ' 处';
     }
@@ -1599,6 +1644,7 @@ const TEXT_ACTIONS = {
       commitText(out, '查找替换（1 处）');
       editor.focus();
       editor.setSelectionRange(cursor, cursor);
+      revealMatch(cursor);
       recount();
       $count.textContent = '已替换 · 还剩 ' + total + ' 处';
     }
