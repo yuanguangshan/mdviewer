@@ -1002,9 +1002,9 @@ function nextView() {
   setView(cycle[(cycle.indexOf(viewMode) + 1) % cycle.length]);
 }
 $('#btnView').addEventListener('click', nextView);
-// 手机默认纯编辑（上下叠放时双屏没法用），桌面默认双栏
+// 手机默认预览（打开即看排版效果），桌面默认双栏
 {
-  setView(isMobileLayout() ? 'edit' : 'split');
+  setView(isMobileLayout() ? 'preview' : 'split');
 }
 
 // === SECTION: 全屏：隐藏工具栏/状态栏（+ 尝试浏览器原生全屏），右上角 ✕ 退出 ===
@@ -3485,7 +3485,7 @@ if ('serviceWorker' in navigator) {
 
 // === SECTION: 响应式：窄屏启用软换行（手机可换行），宽屏 wrap=off 保持行号对齐 ===
 function applyResponsive() {
-  if (isMobileLayout() && viewMode === 'split') setView('edit');   // 旋屏/缩窗进入手机布局时，若仍停在分屏则退回编辑（手机不分屏）
+  if (isMobileLayout() && viewMode === 'split') setView('preview');   // 旋屏/缩窗进入手机布局时，若仍停在分屏则退回预览（手机不分屏，默认预览）
   renderEditorHighlight();   // 进入/离开移动端时重算覆盖层显隐（换行由用户偏好 applyWrap 控制）
 }
 window.addEventListener('resize', debounce(applyResponsive, 200));
