@@ -564,7 +564,7 @@ function renderMarkdown() {
       + '<div class="welcome-emoji">✍️</div>'
       + '<h2>开始创作</h2>'
       + '<p class="welcome-sub">支持 <kbd>Ctrl+S</kbd> 保存 · <kbd>Ctrl+O</kbd> 打开</p>'
-      + '<p class="welcome-note">拖拽/粘贴图片 · 语法高亮 · 多主题预览 · 📚 文库自动回写</p>'
+      + '<p class="welcome-note">拖拽/粘贴图片 · 语法高亮 · 多主题预览 · 🗄️ 文库自动回写</p>'
       + '</div>';
   } else {
     try {
@@ -1387,14 +1387,18 @@ async function copyHTML() {
   }
 }
 /* 复制渲染后的纯文本：克隆到可见处取 innerText，保证纯编辑视图（预览隐藏）下也有正确换行 */
+/* 取预览渲染后的纯文本（已去除 Markdown 标记符号），用于复制 / 导出 txt */
+function previewPlainText() {
+  const clone = preview.cloneNode(true);
+  clone.style.cssText = 'position:absolute;left:-9999px;top:0';
+  document.body.appendChild(clone);
+  const txt = clone.innerText;
+  clone.remove();
+  return txt;
+}
 async function copyText() {
   try {
-    const clone = preview.cloneNode(true);
-    clone.style.cssText = 'position:absolute;left:-9999px;top:0';
-    document.body.appendChild(clone);
-    const txt = clone.innerText;
-    clone.remove();
-    await navigator.clipboard.writeText(txt);
+    await navigator.clipboard.writeText(previewPlainText());
     flash('已复制文本');
   } catch {
     flash('复制失败');
@@ -1457,6 +1461,25 @@ async function exportMarkdown() {
   }
   download(name, editor.value, 'text/markdown;charset=utf-8');
   flash('已导出 Markdown');
+}
+async function exportTxt() {
+  // 导出纯文本（去掉 Markdown 标记，等同于预览的文字内容）为 .txt
+  const name = currentName.replace(/\.(md|markdown|txt|html?|pdf)$/i, '') + '.txt';
+  const text = previewPlainText();
+  if ('showSaveFilePicker' in window) {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: '纯文本', accept: { 'text/plain': ['.txt'] } }] });
+      const w = await handle.createWritable();
+      await w.write(text);
+      await w.close();
+      flash('已导出 txt');
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // 用户取消
+    }
+  }
+  download(name, text, 'text/plain;charset=utf-8');
+  flash('已导出 txt');
 }
 async function exportHTML() {
   // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
@@ -3069,6 +3092,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'copymd') copyMarkdown();
   else if (act === 'copy') copyHTML();
   else if (act === 'md') exportMarkdown();
+  else if (act === 'txt') exportTxt();
   else if (act === 'html') exportHTML();
   else if (act === 'pdf') exportPDF();
   else if (act === 'wrap') { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }
