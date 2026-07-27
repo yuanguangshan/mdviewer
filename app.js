@@ -28,7 +28,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v2.3.22';
+const APP_VERSION = 'v2.3.23';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
@@ -935,7 +935,9 @@ function updateStats() {
   const enWords = (t.replace(cjkRe, ' ').match(/[A-Za-z0-9]+/g) || []).length; // 其余按词
   const words = cjk + enWords;
   const readMin = Math.max(1, Math.round(words / 300));
-  $('#stat').textContent = words + ' 字 · ' + readMin + ' 分';
+  const txt = words + ' 字 · ' + readMin + ' 分';
+  $('#stat').textContent = txt;
+  const ri = $('#readInfo'); if (ri) ri.textContent = txt;   // 预览模式底部栏复用同一数据
 }
 function updateGutter() {
   const lines = editor.value.split('\n').length;
@@ -969,6 +971,12 @@ function setView(m) {
   document.body.classList.remove('no-preview', 'no-editor');
   if (m === 'edit') document.body.classList.add('no-preview');
   if (m === 'preview') document.body.classList.add('no-editor');
+  // 底部状态栏按模式切换：预览显「字数·阅读时长」，编辑/分屏显「行·列」
+  const isPreview = (m === 'preview');
+  const pi = $('#posInfo'), ri = $('#readInfo');
+  if (pi) pi.hidden = isPreview;
+  if (ri) ri.hidden = !isPreview;
+  if (isPreview) updateStats();   // 进入预览即刷新篇幅/阅读时长（编辑期间已是最新）
   $('#btnView').textContent = VIEW_LABEL[m];
   if (m !== 'preview') editor.focus();
   // 进入预览：rAF 等布局稳定后，把预览定位到编辑器当前所在章节（不回开头）
