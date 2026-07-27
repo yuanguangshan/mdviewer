@@ -28,7 +28,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v2.3.20';
+const APP_VERSION = 'v2.3.21';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
@@ -2046,6 +2046,54 @@ function writtenChapterNums(text) {
   return nums;
 }
 
+// 中文数字小值解析（≤99999，支持 千/百/十 组合，如「五千」「一百二」「二十五」）
+function cnSmall(s) {
+  const d = { '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+  let n = 0;
+  if (s.includes('千')) { const p = s.split('千'); n += (p[0] ? cnSmall(p[0]) : 1) * 1000; s = p[1] || ''; }
+  if (s.includes('百')) { const p = s.split('百'); n += (p[0] ? cnSmall(p[0]) : 1) * 100; s = p[1] || ''; }
+  if (s.includes('十')) { const p = s.split('十'); n += (p[0] ? cnSmall(p[0]) : 1) * 10; s = p[1] || ''; }
+  if (s) n += d[s] || 0;
+  return n;
+}
+
+// 把“X字/X万字/X千字”（阿拉伯或中文数字、支持小数 1.5万、支持链式 1万五千）解析成具体字数
+function parseCountValue(seg) {
+  const unit = { '亿': 1e8, '万': 1e4, '千': 1e3, '百': 1e2, '十': 10 };
+  let total = 0, matched = false;
+  // 阿拉伯：(\d+(?:\.\d+)?)\s*单位?  |  中文：([一二两三四五六七八九十百零]+)单位（单位必选，避免非贪婪丢单位）
+  // 支持链式累加：1万五千 → 1万 + 五千 = 15000
+  const re = /(\d+(?:\.\d+)?)\s*(亿|万|千|百|十)?|([一二两三四五六七八九十百零]+)(亿|万|千|百|十)/g;
+  let m;
+  while ((m = re.exec(seg))) {
+    let num, u = '';
+    if (m[1] !== undefined && m[1] !== '') { num = parseFloat(m[1]); u = m[2] || ''; }
+    else if (m[3] !== undefined && m[3] !== '') { num = cnSmall(m[3]); u = m[4] || ''; }
+    else continue;
+    if (!num || isNaN(num)) continue;
+    total += num * (unit[u] || 1);
+    matched = true;
+  }
+  return matched ? Math.round(total) : null;
+}
+
+// 从文本识别字数目标：优先「字数目标/要求…」语境，否则直接找「数值[万千]?字」；
+// 返回 { count, cmp }（cmp: 'min'=不少于/至少/以上，'approx'=约/默认），未识别返回 null。
+function parseWordCount(text) {
+  if (!text) return null;
+  let m = text.match(/字数[目标要求约]*\s*[:：]?\s*([^\n，。；,.;]{0,20}?字)/);
+  let seg = m ? m[1] : null;
+  if (!seg) {
+    m = text.match(/(?:不少于|至少|≥|大于等于|以上|约|大约)?\s*[0-9一二两三四五六七八九十百千万零]+(?:\.[0-9]+)?\s*[万千]?\s*字/);
+    seg = m ? m[0] : null;
+  }
+  if (!seg) return null;
+  const cmp = /(不少于|至少|≥|大于等于|以上|最少|目标)/.test(text) ? 'min' : 'approx';
+  const count = parseCountValue(seg);
+  if (!count || count < 200) return null; // 过滤噪声
+  return { count, cmp };
+}
+
 const AI_ACTIONS = {
   // 全文总结：流式打字机展示，结束后插入文首
   aiSummary() {
@@ -2169,6 +2217,16 @@ const AI_ACTIONS = {
       points = outlinePart.slice(from, to).trim().slice(0, 1200);
     }
 
+    // ③b 字数目标：尊重用户要求——优先取本章大纲里的「字数目标」，否则取全局首行的「每章不少于X字」；
+    //     两者皆无才回退默认 2000-3000 字（避免硬编码覆盖用户显式要求，见 v2.3.21）。
+    const headerText = outlinePart.split(/\n\s*##\s*第/)[0]; // 第一个「## 第X章」之前（含首行字数要求）
+    const globalWc = parseWordCount(headerText);
+    const chapterWc = points ? parseWordCount(points) : null;
+    const wc = chapterWc || globalWc;
+    const lenInst = wc
+      ? '· 篇幅' + (wc.cmp === 'min' ? '不少于 ' : '约 ') + wc.count + ' 字（这是硬性要求，务必写足，不要过早收尾）。\n'
+      : '· 篇幅约 2000-3000 字。\n';
+
     // ④ 上一章结尾 ~1500 字（保证衔接）；仅当已写过编号≥1的正文章节才带。
     // 不能用 firstMark !== -1 判断：大纲结束锚点 ai-chapter:0 也会命中 firstMark，
     // 若据此把文档尾部（= 大纲本身）当“上一章结尾”传给 AI，会污染首章上下文。
@@ -2184,7 +2242,8 @@ const AI_ACTIONS = {
     aiRunStream({
       label: 'AI 续写 ' + chapLabel,
       systemPrompt: '你是一名有个人风格、有血有肉的专业作家，正在按既定大纲撰写一本书。请只撰写用户指定的这一章正文：\n' +
-        '· 以「## ' + chapLabel + '」这样的二级标题开头；内容充实、行文与上一章自然衔接；篇幅约 2000-3000 字。\n' +
+        '· 以「## ' + chapLabel + '」这样的二级标题开头；内容充实、行文与上一章自然衔接。\n' +
+        lenInst +
         '· 写完本章即停——不要写下一章、不要复述大纲、不要输出任何解释。\n' +
         '· 反共识：每章至少包含一处与主流认知相悖的「个人观察」，单独成段并以「> 💡 独思时刻：」开头。\n' +
         '   —— 该观察必须以第一人称「我」开头，源于你（作者角色）亲历或推演出的真实体悟，而非转述外部案例报道；\n' +
