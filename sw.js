@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v3.0.4';
+const CACHE_NAME = 'md-editor-v3.0.5';
 
 const SHELL = [
   './',
@@ -18,11 +18,17 @@ const SHELL = [
   // 改为运行时按需懒加载（见 app.js loadScript），不纳入预缓存，避免安装即下载 4MB+。
 ];
 
-/* ---------- 安装：预缓存完整应用外壳（任一失败即抛） ---------- */
+/* ---------- 安装：预缓存完整应用外壳（best-effort，单文件失败不阻断） ---------- */
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(SHELL);          // 本地资源必须完整缓存，否则离线不可用
+    // cache:'reload' 绕过 HTTP 缓存，确保预缓存的是部署时的新鲜文件
+    await Promise.all(SHELL.map(async (u) => {
+      try {
+        const res = await fetch(u, { cache: 'reload' });
+        if (res && (res.ok || res.type === 'opaque')) await cache.put(u, res);
+      } catch (_) { /* 单文件失败忽略，运行时仍可降级 */ }
+    }));
     await self.skipWaiting();
   })());
 });
@@ -38,7 +44,12 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-/* ---------- 请求拦截：缓存优先（cache-first）+ 后台更新 ---------- */
+/* 收到页面「立即接管」消息时，跳过等待直接激活（覆盖 iOS 等 claim 不及时场景） */
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+/* ---------- 请求拦截 ---------- */
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
@@ -50,9 +61,34 @@ self.addEventListener('fetch', (event) => {
   // 直接透传、不缓存。
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  // 缓存优先：命中缓存即直接返回（首屏快、离线可用），
-  // 同时后台用网络响应刷新缓存（stale-while-revalidate）；
-  // 未命中再走网络并写入缓存，供下次秒开/离线使用。
+  // 应用外壳（index.html / app.js / styles.css / sw.js / manifest）：网络优先。
+  // 关键：部署新版本后用户点「立即刷新」，必须能从网络拿到最新外壳，否则在
+  // 缓存优先 + claim 未及时接管（尤其 iOS Safari）时会一直回退旧版本，
+  // 表现为「点了刷新没反应、更新条反复弹」。网络优先保证刷新即最新，离线再回退缓存。
+  const p = url.pathname;
+  const isShell = p === '/' || p.endsWith('/index.html') || p.endsWith('/app.js') ||
+                  p.endsWith('/styles.css') || p.endsWith('/manifest.webmanifest') || p.endsWith('/sw.js');
+
+  if (isShell) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      try {
+        const fresh = await fetch(req);
+        if (fresh && (fresh.ok || fresh.type === 'opaque')) {
+          try { await cache.put(req, fresh.clone()); } catch (_) {}
+        }
+        return fresh;
+      } catch (_) {
+        const cached = await cache.match(req) ||
+          (req.mode === 'navigate' ? (await cache.match('./index.html')) : null);
+        return cached || Response.error();
+      }
+    })());
+    return;
+  }
+
+  // 其余静态资源（vendor 库 / 图标 / 图片）：缓存优先（cache-first）+ 后台更新，
+  // 首屏快、离线可用；命中即返回，同时后台用网络响应刷新缓存（stale-while-revalidate）。
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(req);

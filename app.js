@@ -3442,8 +3442,11 @@ function renderShortcutHints() {
    弹出非阻塞提示条，用户点击「立即刷新」即应用新版本，无需反复手动硬刷。 */
 if ('serviceWorker' in navigator) {
   const updateBanner = document.getElementById('updateBanner');
-  const showUpdateBanner = () => { if (updateBanner) updateBanner.hidden = false; };
-  const hideUpdateBanner = () => { if (updateBanner) updateBanner.hidden = true; };
+  // 本次会话已处理过更新（点过「立即刷新」或「✕」），加载后不再反复弹更新条
+  const SW_DISMISSED = 'md-sw-dismissed';
+  const isDismissed = () => { try { return sessionStorage.getItem(SW_DISMISSED) === '1'; } catch (_) { return false; } };
+  const showUpdateBanner = () => { if (isDismissed()) return; if (updateBanner) updateBanner.hidden = false; };
+  const hideUpdateBanner = () => { try { sessionStorage.setItem(SW_DISMISSED, '1'); } catch (_) {} if (updateBanner) updateBanner.hidden = true; };
 
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').then((reg) => {
@@ -3454,6 +3457,7 @@ if ('serviceWorker' in navigator) {
         newWorker.addEventListener('statechange', () => {
           // installed 且存在旧 SW 控制页面 → 说明有可用更新
           if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            try { sessionStorage.removeItem(SW_DISMISSED); } catch (_) {} // 新部署：允许再次提示
             showUpdateBanner();
           }
         });
@@ -3470,9 +3474,30 @@ if ('serviceWorker' in navigator) {
     }).catch(() => {});
   });
 
-  // 用户点击「立即刷新」→ 重新加载本页。因 sw.js 安装时已 skipWaiting + clients.claim，
-  // 新 SW 已就绪，reload 后即为新版本（含最新 app.js / index.html）。
-  const doUpdate = () => { location.reload(); };
+  // 用户点击「立即刷新」：先标记本次已处理（避免重载后更新条反复弹），
+  // 再让等待中的新 SW 立即接管（postMessage SKIP_WAITING，覆盖 iOS 等 claim 不及时场景），
+  // 待其真正 activated 后再 reload；1.2s 兜底也刷新（新 SW 已就绪，网络优先保证拿到最新外壳）。
+  const doUpdate = () => {
+    try { sessionStorage.setItem(SW_DISMISSED, '1'); } catch (_) {}
+    const sw = navigator.serviceWorker;
+    if (sw && sw.getRegistration) {
+      sw.getRegistration().then((reg) => {
+        const reload = () => location.reload();
+        if (reg && reg.waiting) {
+          let fired = false;
+          reg.waiting.addEventListener('statechange', () => {
+            if (!fired && reg.waiting && reg.waiting.state === 'activated') { fired = true; reload(); }
+          });
+          try { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (_) {}
+          setTimeout(reload, 1200);
+        } else {
+          reload();
+        }
+      }).catch(() => location.reload());
+    } else {
+      location.reload();
+    }
+  };
   const rb = document.getElementById('updateReloadBtn');
   const db = document.getElementById('updateDismissBtn');
   if (rb) rb.onclick = doUpdate;
