@@ -89,7 +89,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v2.3.24';
+const APP_VERSION = 'v3.0.0';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
