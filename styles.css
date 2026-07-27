@@ -558,7 +558,18 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
   color: transparent; -webkit-text-fill-color: transparent;
   caret-color: var(--text);
 }
-.editor-wrap.has-overlay #editor::selection { background: rgba(99, 102, 241, .30); }
+#editor::selection { background: rgba(99, 102, 241, .45); }
+.editor-wrap.has-overlay #editor::selection {
+  background: rgba(99, 102, 241, .55);
+  color: #fff;
+  -webkit-text-fill-color: #fff;
+}
+.editor-highlight .search-hit {
+  background: rgba(250, 204, 21, .45);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, .65);
+  color: inherit;
+}
 
 /* 换行开时隐藏编辑器滚动条（消除横向滑动条；并使覆盖层换行宽度与编辑器一致以对齐）*/
 .editor-wrap.wrap-on #editor { scrollbar-width: none; }

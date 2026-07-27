@@ -89,7 +89,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v3.0.0';
+const APP_VERSION = 'v3.0.1';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
@@ -524,6 +524,7 @@ function applyMdTheme(mode) {
 
 // === SECTION: 渲染 + 代码高亮 ===
 let renderTimer = null;
+let currentSearchHit = null;   // { start, end }：当前查找/替换匹配项在 editor.value 中的字节范围；用于覆盖层高亮
 // 懒加载大体积第三方库（避免首屏同步下载数 MB）
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -961,12 +962,51 @@ function renderEditorHighlight() {
     return;
   }
   try {
-    editorHighlight.innerHTML = hljs.highlight(editor.value, { language: 'markdown' }).value;
+    let html = hljs.highlight(editor.value, { language: 'markdown' }).value;
+    if (currentSearchHit) html = wrapSearchHitInHtml(html, currentSearchHit);
+    editorHighlight.innerHTML = html;
     editor.parentElement.classList.add('has-overlay');
     syncHighlightScroll();
   } catch (_) {
     editor.parentElement.classList.remove('has-overlay');
   }
+}
+// 在语法高亮 HTML 中给当前查找匹配段包裹 <mark class="search-hit">，使关键词在覆盖层上清晰可见。
+// 基于 textContent 偏移映射，可跨语法 token 边界。
+function wrapSearchHitInHtml(html, hit) {
+  if (!hit || hit.start >= hit.end) return html;
+  const frag = document.createRange().createContextualFragment(html);
+  let offset = 0, done = false;
+  const mark = document.createElement('mark');
+  mark.className = 'search-hit';
+  const walker = document.createTreeWalker(frag, NodeFilter.SHOW_TEXT, null, false);
+  const nodes = [];
+  let n;
+  while ((n = walker.nextNode())) nodes.push(n);
+  for (const node of nodes) {
+    if (done) break;
+    const len = node.textContent.length;
+    const ns = offset, ne = offset + len;
+    offset = ne;
+    if (ne <= hit.start || ns >= hit.end) continue;
+    const s = Math.max(0, hit.start - ns);
+    const e = Math.min(len, hit.end - ns);
+    const before = node.textContent.slice(0, s);
+    const mid = node.textContent.slice(s, e);
+    const after = node.textContent.slice(e);
+    const parent = node.parentNode;
+    const ref = node;
+    if (before) parent.insertBefore(document.createTextNode(before), ref);
+    const m = mark.cloneNode();
+    m.textContent = mid;
+    parent.insertBefore(m, ref);
+    if (after) parent.insertBefore(document.createTextNode(after), ref);
+    parent.removeChild(ref);
+    if (offset >= hit.end) done = true;
+  }
+  const tmp = document.createElement('div');
+  tmp.appendChild(frag);
+  return tmp.innerHTML;
 }
 function syncHighlightScroll() {
   editorHighlight.scrollTop = editor.scrollTop;
@@ -1200,6 +1240,7 @@ function scheduleHighlight() {
   _hlRaf = requestAnimationFrame(() => { _hlRaf = 0; renderEditorHighlight(); });
 }
 function afterChange(opts) {
+  currentSearchHit = null;       // 内容变化后旧的查找高亮位置失效
   scheduleRender();
   scheduleHighlight();
   updateStats();
@@ -1629,9 +1670,10 @@ const TEXT_ACTIONS = {
     function recount() {
       const re = buildRegex();
       if (re === false) return;
-      if (!re) { $count.textContent = '输入查找内容'; total = 0; return; }
+      if (!re) { $count.textContent = '输入查找内容'; total = 0; currentSearchHit = null; return; }
       total = (editor.value.match(re) || []).length;
       $count.textContent = total ? ('找到 ' + total + ' 处') : '未找到匹配';
+      if (!total) { currentSearchHit = null; renderEditorHighlight(); }
     }
     // 等宽字体单字符宽度（缓存，避免每次查找都建 DOM）
     let _charW = 0;
@@ -1663,8 +1705,10 @@ const TEXT_ACTIONS = {
       const lineY = line * lh + padTop;                       // 该行顶部 Y（相对内容）
       const viewTop = editor.scrollTop;
       const viewBottom = viewTop + editor.clientHeight;
+      const panel = document.getElementById('findReplacePanel');
+      const panelHeight = panel ? panel.getBoundingClientRect().height : 0;
       if (lineY < viewTop || lineY + lh > viewBottom) {
-        editor.scrollTop = Math.max(0, lineY - editor.clientHeight / 3);
+        editor.scrollTop = Math.max(0, lineY - Math.max(panelHeight + lh, editor.clientHeight / 3));
       }
       if (!wrapMode) {                                        // 不换行：横向也可能超出，按列滚动
         const cw = measureCharWidth(cs);
@@ -1688,7 +1732,9 @@ const TEXT_ACTIONS = {
       if (!m) { $count.textContent = '未找到匹配'; return; }
       editor.focus();
       editor.setSelectionRange(m.index, m.index + m[0].length);
+      currentSearchHit = { start: m.index, end: m.index + m[0].length };
       revealMatch(m.index);
+      renderEditorHighlight();
       cursor = m.index + (m[0].length || 1);   // 零宽断言（^ $ \b）length=0，兜底 +1 防原地死循环
       $count.textContent = (wrapped ? '已到末尾，回到开头 · ' : '') + '找到 ' + total + ' 处';
     }
@@ -1709,7 +1755,9 @@ const TEXT_ACTIONS = {
       commitText(out, '查找替换（1 处）');
       editor.focus();
       editor.setSelectionRange(cursor, cursor);
+      currentSearchHit = { start: start, end: cursor };
       revealMatch(cursor);
+      renderEditorHighlight();
       recount();
       $count.textContent = '已替换 · 还剩 ' + total + ' 处';
     }
@@ -1726,6 +1774,8 @@ const TEXT_ACTIONS = {
       closePanel();
     }
     function closePanel() {
+      currentSearchHit = null;
+      renderEditorHighlight();
       panel.remove();
       document.removeEventListener('keydown', onKey, true);
     }
