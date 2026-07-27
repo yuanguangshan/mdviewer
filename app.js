@@ -28,7 +28,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v2.3.19';
+const APP_VERSION = 'v2.3.20';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
@@ -2133,16 +2133,23 @@ const AI_ACTIONS = {
     const done = writtenChapterNums(doc);
     let target = chapters.find((c) => !done.has(c.num));
     if (!target) {
-      if (chapters.length && isAutoNow()) {
-        // 自动模式且全书已写完：停止续写，不弹窗阻塞（取消自动后仍可手动指定重写/加写）
-        toast('🎉 全书已写完，自动续写已停止', 'ok');
+      // 已无未写章节：自动模式且确为书稿（有大纲章或已写过正文）→ 自动补写「终章后记」一次；否则停止
+      const isBook = chapters.length > 0 || /<!--\s*ai-chapter:[1-9]\d*\s*-->/.test(doc);
+      if (isAutoNow() && isBook) {
+        if (!/<!--\s*ai-epilogue\s*-->/.test(doc)) {
+          // 全书正文章节已写完，且尚无后记 → 自动生成终章后记（只此一次），生成完即停止全自动
+          AI_ACTIONS.aiWriteEpilogue(true);
+          return;
+        }
+        // 正文章节 + 终章后记 均已生成 → 真正结束
+        toast('🎉 全书及终章后记已完成，自动写作已停止', 'ok');
         setAutoWrite(false);
         setFullAuto(false);
         if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer();
         const p = document.getElementById('aiStreamPanel'); if (p) p.hidden = true;
         return;
       }
-      // 大纲解析不到章节，或全部写完 → 弹窗手动指定（与 aiGenerate 同风格）
+      // 手动模式（或非书稿）：弹窗手动指定重写/加写章节（与 aiGenerate 同风格）
       const hint = chapters.length
         ? '大纲中的章节均已写完。如需重写/加写，请输入章节（如：第4章 XXX）：'
         : '未能从文档中识别出「第X章」大纲。请输入要写的章节（如：第1章 XXX）：';
@@ -2179,9 +2186,13 @@ const AI_ACTIONS = {
       systemPrompt: '你是一名有个人风格、有血有肉的专业作家，正在按既定大纲撰写一本书。请只撰写用户指定的这一章正文：\n' +
         '· 以「## ' + chapLabel + '」这样的二级标题开头；内容充实、行文与上一章自然衔接；篇幅约 2000-3000 字。\n' +
         '· 写完本章即停——不要写下一章、不要复述大纲、不要输出任何解释。\n' +
-        '· 反共识：每章至少包含一处与主流认知相悖的「个人观察」，单独成段并以「> 💡 独思时刻：」开头，须基于真实或可信的具体场景，避免泛泛而谈。\n' +
+        '· 反共识：每章至少包含一处与主流认知相悖的「个人观察」，单独成段并以「> 💡 独思时刻：」开头。\n' +
+        '   —— 该观察必须以第一人称「我」开头，源于你（作者角色）亲历或推演出的真实体悟，而非转述外部案例报道；\n' +
+        '      严禁套用「202X年X月，某地某企业／工厂／CEO……」的万能故事模板——那只会让反共识沦为新的八股，读者一眼看穿。\n' +
         '· 去套话：严禁使用「降维打击」「赋能」「范式转移」「底层逻辑」「超级个体」「终极壁垒」「认知升维」等空洞词汇，改用具体、有画面感的表述。\n' +
         '· 具体化：每个抽象观点都必须配一个不超过 30 字、含具体时间/地点/人物或事件的微型故事，给读者真实的「肉身感」。\n' +
+        '· 案例真实性：本章中若用到虚构或基于行业逻辑推演的场景案例，须明确标注其边界——\n' +
+        '  可在案例前加「假设你是……」引导，或在段尾加方括号注「注：本案例为行业逻辑推演，非真实事件」，切勿让读者误以为是确凿的新闻事实。\n' +
         '使用 Markdown 格式，只输出本章正文：',
       promptText,
       onApply: (full) => {
@@ -2198,6 +2209,52 @@ const AI_ACTIONS = {
         if (aiFullAuto && aiStreamApply) {
           const fn = aiStreamApply; aiStreamApply = null; fn(aiStreamFull);
           afterApply();
+        }
+      }
+    });
+  },
+  // 终章后记：全书正文章节写完后，以前书中设定的「作者」第一人称口吻，生成一篇约500字的终章后记
+  // autoMode=true 时（全自动/半自动流程触发）：生成完成即自动应用并结束写作；false 时（手动按钮）由用户点「应用」插入
+  aiWriteEpilogue(autoMode) {
+    const doc = editor.value;
+    if (!doc.trim()) { toast('文档为空', 'err'); return; }
+    if (/<!--\s*ai-epilogue\s*-->/.test(doc)) { toast('终章后记已存在', 'info'); return; }
+    const titleMatch = doc.match(/^#\s+(.+)$/m);
+    const bookTitle = titleMatch ? titleMatch[1].trim() : '本书';
+    const promptText = '这是一本名为《' + bookTitle + '》的商业书籍，所有正文章节已经写完。\n' +
+      '请以前书中设定的「作者」第一人称口吻，写一篇约 500 字的「终章·后记」：\n' +
+      '· 以作者个人口吻对读者掏心窝子地说一段话，不要用教科书或 AI 助手的口吻；\n' +
+      '· 必须包含：创作过程中最痛苦的一个决策、最意外的一个收获；\n' +
+      '· 可以呼应书中某个「💡 独思时刻」，但要用作者自己的反思语气，而非重复正文；\n' +
+      '· 允许留白、允许不确定、允许真实的人类情绪（犹豫、后悔、兴奋）；禁用空洞词（赋能、降维打击、范式转移、底层逻辑、超级个体、终极壁垒、认知升维）；\n' +
+      '· 使用 Markdown，以二级标题「## 终章·后记」开头，只输出后记正文。';
+    const systemPrompt = '你就是这本书的作者，一位有真实商业实战经验、有脾气、有偏见的从业者。现在彻底放下「AI 助手」的身份，用你本人的口吻写作。' +
+      '语言要有体温、有具体细节、允许不完美与真实的人类情绪；严禁任何空洞词汇与工整的排比套话。只输出后记正文：';
+    aiRunStream({
+      label: '✍️ 终章后记',
+      systemPrompt,
+      promptText,
+      onApply: (full) => {
+        // 隐形标记 + 后记正文，统一追加到文档末尾（标记在预览中不可见）
+        const insertText = '\n\n<!-- ai-epilogue -->\n\n' + full.trim() + '\n';
+        editor.value = editor.value.replace(/\s*$/, '') + insertText;
+        editor.selectionStart = editor.selectionEnd = editor.value.length;
+        afterChange();
+        editor.scrollTop = editor.scrollHeight;
+        toast('📝 终章后记已追加到文末', 'ok');
+        // 自动流程触发：写完后记即结束写作（不再续章），复位开关并隐藏面板
+        if (autoMode) {
+          setAutoWrite(false);
+          setFullAuto(false);
+          if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer();
+          const p = document.getElementById('aiStreamPanel'); if (p) p.hidden = true;
+        }
+      },
+      onComplete: () => {
+        // 全自动模式：生成完成即自动应用后记，并结束（不续写下一章）
+        if (aiFullAuto && aiStreamApply) {
+          const fn = aiStreamApply; aiStreamApply = null; fn(aiStreamFull);
+          // 注意：不调用 afterApply（否则会启动倒计时续章）；onApply 内部已停止全自动并隐藏面板
         }
       }
     });
