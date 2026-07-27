@@ -28,7 +28,7 @@ if (!document.querySelector('#btnMore')) {
 // SW 更新过渡期可能滞后，导致“页面显示新按钮(来自新 HTML) 却运行旧 app.js 逻辑”的错配
 // （本项目高频踩坑：自动续写等新增功能在旧缓存下“点了没反应/框消失”）。
 // 对策：app.js 内嵌自身版本 APP_VERSION，与新鲜 HTML 中的版本号比对，不一致则硬刷新收敛。
-const APP_VERSION = 'v2.3.18';
+const APP_VERSION = 'v2.3.19';
 (function versionSkewHeal() {
   try {
     const htmlVer = ($('.version') || {}).textContent || '';
@@ -1865,10 +1865,66 @@ let aiStreamAbort = null;   // 当前流式请求的 AbortController
 let aiStreamApply = null;   // 完成后的"应用"回调
 let aiStreamFull = '';      // 已生成全文
 let aiAutoWrite = false;    // 「🔁 自动续写」开关：开启后每章应用即自动续写下一章，面板常显
+let aiFullAuto = false;     // 「⏩ 全自动写作」开关：生成完成自动应用本章 + 暂停 N 秒 + 自动续写下一章
 function setAutoWrite(on) { aiAutoWrite = !!on; const cb = document.getElementById('aspAuto'); if (cb) cb.checked = aiAutoWrite; }
+function setFullAuto(on) { aiFullAuto = !!on; const cb = document.getElementById('aspFullAuto'); if (cb) cb.checked = aiFullAuto; }
+// 是否处于自动续写（半自动或全自动）状态
+function isAutoNow() {
+  const a = document.getElementById('aspAuto'), f = document.getElementById('aspFullAuto');
+  return !!(aiAutoWrite || aiFullAuto || (a && a.checked) || (f && f.checked));
+}
+// 全自动章节间隔（毫秒），可由测试覆盖 window.AI_FULLAUTO_PAUSE_MS 加速
+const FULLAUTO_PAUSE = (window.AI_FULLAUTO_PAUSE_MS || 10000);
+let aiFullAutoTimer = null; // { interval, timeout }
 
-// 打开浮层并发起流式请求；文本实时追加到面板，点"应用"时调用 onApply(full)
-function aiRunStream({ label, systemPrompt, promptText, onApply }) {
+// 清除全自动倒计时（切换章节/停止/取消时调用），恢复标准浮层脚注
+function clearFullAutoTimer() {
+  if (aiFullAutoTimer) {
+    try { clearTimeout(aiFullAutoTimer.timeout); clearInterval(aiFullAutoTimer.interval); } catch (_) {}
+    aiFullAutoTimer = null;
+  }
+  const bar = document.getElementById('aspAutoBar');
+  if (bar) bar.hidden = true;
+  const foot = document.querySelector('#aiStreamPanel .asp-foot');
+  if (foot) foot.hidden = false;
+}
+// 全自动：写完本章后暂停 FULLAUTO_PAUSE 毫秒，再自动续写下一章；暂停期间可「⏹ 停止」或「⏩ 立即继续」
+function startFullAutoCountdown() {
+  const bar = document.getElementById('aspAutoBar');
+  const foot = document.querySelector('#aiStreamPanel .asp-foot');
+  const cd = document.getElementById('aspCountdown');
+  if (!bar) { if (aiFullAuto) AI_ACTIONS.aiWriteNextChapter(); return; } // 无 UI 兜底：直接续写
+  if (foot) foot.hidden = true;
+  bar.hidden = false;
+  const endAt = Date.now() + FULLAUTO_PAUSE;
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+    if (cd) cd.textContent = '⏳ ' + left + ' 秒后继续下一章…（⏹ 停止 / ⏩ 立即继续）';
+    if (left <= 0 && aiFullAutoTimer) { /* 由 timeout 统一触发，避免重复 */ }
+  };
+  tick();
+  const interval = setInterval(tick, 250);
+  const timeout = setTimeout(() => {
+    clearFullAutoTimer();
+    if (aiFullAuto) AI_ACTIONS.aiWriteNextChapter(); // 全书写完时 aiWriteNextChapter 内部会自动停止
+  }, FULLAUTO_PAUSE);
+  aiFullAutoTimer = { interval, timeout };
+}
+// 应用插入（统一出口）：中止流 + 调用插入回调；返回是否成功插入
+function doApplyInsert() {
+  if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
+  if (aiStreamApply) { const fn = aiStreamApply; aiStreamApply = null; fn(aiStreamFull); return true; }
+  return false;
+}
+// 应用后的续写决策：全自动→倒计时；半自动→立即下一章；否则关闭面板
+function afterApply() {
+  if (aiFullAuto) startFullAutoCountdown();
+  else if (aiAutoWrite) AI_ACTIONS.aiWriteNextChapter();
+  else aiStreamPanelEl.hidden = true;
+}
+
+// 打开浮层并发起流式请求；文本实时追加到面板，点"应用"时调用 onApply(full)；生成成功完成时调用 onComplete()
+function aiRunStream({ label, systemPrompt, promptText, onApply, onComplete }) {
   const panel = document.getElementById('aiStreamPanel');
   const body = document.getElementById('aspBody');
   const caret = document.getElementById('aspCaret');
@@ -1882,6 +1938,7 @@ function aiRunStream({ label, systemPrompt, promptText, onApply }) {
   body.innerHTML = '';
   body.appendChild(caret);
   panel.hidden = false;
+  if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer(); // 进入新一章：恢复标准脚注、隐藏倒计时条
   applyBtn.disabled = false;
   aiStreamAbort = new AbortController();
   aiStreamFull = '';
@@ -1892,8 +1949,10 @@ function aiRunStream({ label, systemPrompt, promptText, onApply }) {
     body.insertBefore(document.createTextNode(delta), caret);
     body.scrollTop = body.scrollHeight;
   }, { signal: ctrl.signal, quiet: true }).then((r) => {
-    if (r) aiStreamFull = r;
-    else { panel.hidden = true; aiStreamApply = null; } // 出错
+    if (r) {
+      aiStreamFull = r;
+      if (typeof onComplete === 'function') { try { onComplete(); } catch (_) {} }
+    } else { panel.hidden = true; aiStreamApply = null; } // 出错
   });
 }
 
@@ -2074,10 +2133,12 @@ const AI_ACTIONS = {
     const done = writtenChapterNums(doc);
     let target = chapters.find((c) => !done.has(c.num));
     if (!target) {
-      if (chapters.length && (aiAutoWrite || (document.getElementById('aspAuto') || {}).checked)) {
+      if (chapters.length && isAutoNow()) {
         // 自动模式且全书已写完：停止续写，不弹窗阻塞（取消自动后仍可手动指定重写/加写）
         toast('🎉 全书已写完，自动续写已停止', 'ok');
         setAutoWrite(false);
+        setFullAuto(false);
+        if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer();
         const p = document.getElementById('aiStreamPanel'); if (p) p.hidden = true;
         return;
       }
@@ -2131,6 +2192,13 @@ const AI_ACTIONS = {
         afterChange();
         editor.scrollTop = editor.scrollHeight;
         toast('✍️ ' + chapLabel + ' 已写完并追加到文末', 'ok');
+      },
+      onComplete: () => {
+        // 全自动模式：生成完成即自动应用本章（插入正文），并进入倒计时续写下一章
+        if (aiFullAuto && aiStreamApply) {
+          const fn = aiStreamApply; aiStreamApply = null; fn(aiStreamFull);
+          afterApply();
+        }
       }
     });
   },
@@ -2297,30 +2365,38 @@ if (aiStreamPanelEl) {
   // 🔁 自动续写开关：勾选后，每章"应用"即自动续写下一章，面板保持常显
   const aspAutoEl = document.getElementById('aspAuto');
   if (aspAutoEl) aspAutoEl.addEventListener('change', () => { aiAutoWrite = aspAutoEl.checked; });
+  // ⏩ 全自动写作开关：生成完成自动应用本章 + 暂停后自动续写下一章
+  const aspFullAutoEl = document.getElementById('aspFullAuto');
+  if (aspFullAutoEl) aspFullAutoEl.addEventListener('change', () => { aiFullAuto = aspFullAutoEl.checked; });
 
   document.getElementById('aspApply').addEventListener('click', () => {
-    if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
-    if (aiStreamApply) {
-      const fn = aiStreamApply; aiStreamApply = null;
-      fn(aiStreamFull);
-    }
-    const autoNow = aiAutoWrite || (aspAutoEl && aspAutoEl.checked);
-    if (autoNow) {
-      // 自动续写：面板保持打开，立即生成下一章（全书写完时 aiWriteNextChapter 内部会自动停止）
-      AI_ACTIONS.aiWriteNextChapter();
-    } else {
-      aiStreamPanelEl.hidden = true;
-    }
+    const applied = doApplyInsert();
+    if (applied) afterApply();
+    else aiStreamPanelEl.hidden = true;
   });
   document.getElementById('aspCancel').addEventListener('click', () => {
     if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
     aiStreamApply = null;
     setAutoWrite(false);
+    setFullAuto(false);
+    if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer();
     aiStreamPanelEl.hidden = true;
   });
   document.getElementById('aspStop').addEventListener('click', () => {
     if (aiStreamAbort) { try { aiStreamAbort.abort(); } catch (_) {} aiStreamAbort = null; }
     // 停止后保留已生成内容，应用按钮仍可用；自动续写保持武装（应用该章后仍会继续）
+  });
+  // 全自动倒计时条：⏩ 立即继续（跳过等待）/ ⏹ 停止（结束全自动）
+  const aspSkipEl = document.getElementById('aspSkip');
+  if (aspSkipEl) aspSkipEl.addEventListener('click', () => {
+    if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer();
+    if (aiFullAuto) AI_ACTIONS.aiWriteNextChapter();
+  });
+  const aspStopAutoEl = document.getElementById('aspStopAuto');
+  if (aspStopAutoEl) aspStopAutoEl.addEventListener('click', () => {
+    if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer();
+    setFullAuto(false);
+    aiStreamPanelEl.hidden = true;
   });
 }
 
