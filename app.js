@@ -1486,14 +1486,52 @@ async function exportTxt() {
   download(name, text, 'text/plain;charset=utf-8');
   flash('已导出 txt');
 }
+// 从当前已加载的样式表中抽取指定预览主题的颜色 CSS（含 .markdown-body 与 .hljs-*），
+// 使导出的 HTML 与预览配色完全一致：深色主题导出处即为深色底，不再白底刺眼。
+// 走 CSSOM 而非网络请求，file:// 也能用；跨域/不可读样式表自动跳过。
+function getMdThemeCss(theme) {
+  try {
+    const out = [];
+    const needle = 'data-md-theme=' + theme; // CSSOM 会去掉属性选择器的引号，故用无引号匹配
+    for (const sheet of document.styleSheets) {
+      let rules;
+      try { rules = sheet.cssRules; } catch (_) { continue; }
+      for (const r of rules) {
+        if (r.selectorText && r.selectorText.replace(/["']/g, '').indexOf(needle) !== -1) out.push(r.cssText);
+      }
+    }
+    return out.join('\n');
+  } catch (_) { return ''; }
+}
+// 预览主题中的深色配色（背景接近黑）；其余为浅色。仅用于导出时给页面外缘补深色底。
+const MD_THEME_DARK = new Set(['onedark', 'nord', 'gruvbox', 'dracula', 'monokai']);
+
 async function exportHTML() {
   // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
   const html = await inlineLibImages(lastSanitizedHtml || preview.innerHTML);
-  const doc = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'
-    + escapeHtml(currentName) + '</title><style>' + EXPORT_CSS + '</style></head><body class="markdown-body">'
+  const mdTheme = mdThemeMode || 'github';
+  // 抽取当前预览主题的颜色块（如不可用则降级为默认亮色，行为与旧版一致）
+  const themeCss = getMdThemeCss(mdTheme);
+  // 深色主题：抽取真实背景色（优先 .preview-pane，其次 .markdown-body），
+  // 并显式给 body 设深色底——因为深色主题的 .markdown-body 本身透明，靠 .preview-pane 提供底色；
+  // 导出只含 .markdown-body，不设 body 底色会被 EXPORT_CSS 的白底覆盖，反而更刺眼。
+  const dark = MD_THEME_DARK.has(mdTheme);
+  let pageBg = dark ? '#0d1117' : '#ffffff';
+  if (themeCss) {
+    const m = themeCss.match(/\.(?:preview-pane|markdown-body)\s*\{[^}]*?background:\s*([^;!]+)/);
+    if (m) pageBg = m[1].trim();
+  }
+  const darkBgRule = dark ? ('html{background:' + pageBg + '}body{background:' + pageBg + '}') : '';
+  const doc = '<!DOCTYPE html><html lang="zh-CN" data-md-theme="' + mdTheme + '">'
+    + '<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'
+    + escapeHtml(currentName) + '</title><style>'
+    + EXPORT_CSS
+    + darkBgRule
+    + (themeCss ? ('\n' + themeCss) : '')
+    + '</style></head><body class="markdown-body" data-md-theme="' + mdTheme + '">'
     + html + '</body></html>';
   download(currentName.replace(/\.(md|markdown|txt)$/i, '') + '.html', doc, 'text/html;charset=utf-8');
-  flash('已导出 HTML');
+  flash('已导出 HTML' + (themeCss ? '（' + mdTheme + ' 主题）' : ''));
 }
 async function exportPDF() {
   const pdfName = currentName.replace(/\.(md|markdown|txt)$/i, '') + '.pdf';
