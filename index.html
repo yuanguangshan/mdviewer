@@ -29,6 +29,8 @@
   <!-- mermaid / html2pdf 体积大（合计 ~4MB）且非首屏必需，改为按需懒加载（见 app.js），不再这里同步加载 -->
 </head>
 <body>
+  <!-- 全应用背景图图层：图片 + 主题色遮罩，受 --bg-image/--bg-scrim/--bg-fit 控制 -->
+  <div class="app-bg" id="appBg"></div>
   <div class="app">
     <header class="toolbar">
       <div class="toolbar-left">
@@ -54,6 +56,7 @@
               <span class="mi-model" id="aiMenuModel">free</span>
             </button>
             <button role="menuitem" data-action="fmtImage">🖼 插入图片</button>
+            <button role="menuitem" data-act="bg">🖼️ 设置背景图片</button>
             <button role="menuitem" data-act="match-podcast">🎧 插入播客播放器</button>
             <button role="menuitem" data-act="nas-download">📥 从 NAS 下载</button>
             <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
@@ -181,7 +184,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v3.0.16</span>
+      <span class="version">v3.0.17</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -364,6 +367,29 @@
     <button id="updateReloadBtn" type="button" class="update-reload">立即刷新</button>
     <button id="updateDismissBtn" type="button" class="update-dismiss" aria-label="忽略本次提示">✕</button>
   </div>
+
+  <!-- 背景图片设置弹窗 -->
+  <div class="modal" id="bgModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="设置背景图片">
+      <div class="modal-title">🖼️ 设置背景图片</div>
+      <p class="modal-desc">上传一张本地图片作为整个编辑器的背景，仅保存在本机，不上传任何服务器。</p>
+      <div class="bg-preview" id="bgPreview"><span class="bg-preview-empty">尚未设置背景</span></div>
+      <button id="bgFileBtn" type="button" class="btn primary bg-file-btn">📁 上传图片</button>
+      <label for="bgScrim">遮罩浓度（越低越透，文字越淡）</label>
+      <input id="bgScrim" type="range" min="0.3" max="0.95" step="0.05" value="0.7" />
+      <label for="bgFit">填充方式</label>
+      <select id="bgFit">
+        <option value="cover">覆盖（铺满裁剪）</option>
+        <option value="contain">居中（完整显示）</option>
+        <option value="repeat">平铺（重复）</option>
+      </select>
+      <div class="modal-actions">
+        <button id="bgRemove" type="button">移除背景</button>
+        <button id="bgDone" type="button" class="primary">完成</button>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="bgFileInput" accept="image/*" hidden />
 
   <script defer src="./app.js"></script>
 </body>

@@ -2622,8 +2622,28 @@ if (aiModal) {
     else if (e.key === 'Escape') aiModal.hidden = true;
   });
 }
-// 初始渲染一次模型徽标（菜单项右侧 + 生成浮层标题旁）
-updateAiModelBadge();
+  // 初始渲染一次模型徽标（菜单项右侧 + 生成浮层标题旁）
+  updateAiModelBadge();
+
+  // 背景图片设置弹窗
+  const bgModal = $('#bgModal');
+  if (bgModal) {
+    const bgFileInput = $('#bgFileInput');
+    $('#bgFileBtn').addEventListener('click', () => bgFileInput.click());
+    bgFileInput.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) uploadBgFile(f);
+      e.target.value = '';                 // 允许重复选同一文件
+    });
+    $('#bgScrim').addEventListener('input', (e) => setBgScrim(e.target.value));
+    $('#bgFit').addEventListener('change', (e) => setBgFit(e.target.value));
+    $('#bgRemove').addEventListener('click', () => { removeAppBg(); bgModal.hidden = true; });
+    $('#bgDone').addEventListener('click', () => { bgModal.hidden = true; });
+    bgModal.addEventListener('click', (e) => { if (e.target === bgModal) bgModal.hidden = true; });
+    bgModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') bgModal.hidden = true; });
+  }
+  // 启动：若已设置过背景图则自动恢复
+  loadAppBg();
 
 // 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
 const shareModal = $('#shareModal');
@@ -3193,6 +3213,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'share-r2') shareViaR2();
   else if (act === 'layout-swap') toggleLayoutSwap();
   else if (act === 'layout-reset') resetLayout();
+  else if (act === 'bg') openBgDialog();
 });
 
 // === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===
@@ -3677,6 +3698,7 @@ const idbDelete = (id) => idbReq(() => libStore('readwrite').delete(id));
 
 /* 图片 Blob 库（独立于 docs，避免大体积拖慢文档读写） */
 const IMG_STORE = 'images';
+const BG_ID = '__bg__';   // 背景图 Blob 在 images 仓库的专用 key（受 GC 保护，不随孤儿图清理）
 function imgStore(mode) { return libDb.transaction(IMG_STORE, mode).objectStore(IMG_STORE); }
 const idbGetImage = (id) => idbReq(() => imgStore('readonly').get(id));
 const idbPutImage = (rec) => idbReq(() => imgStore('readwrite').put(rec));
@@ -3714,6 +3736,7 @@ async function gcOrphanImages({ silent = false } = {}) {
     try { keys = await idbGetAllImageKeys(); } catch (_) { return 0; }
     let removed = 0;
     for (const id of keys) {
+      if (id === BG_ID) continue;            // 背景图是常驻设置，不被当作孤儿图清理
       if (!referenced.has(id)) {
         try { await idbDeleteImage(id); removed++; } catch (_) {}
       }
@@ -3729,6 +3752,100 @@ async function gcOrphanImages({ silent = false } = {}) {
   } finally {
     _gcRunning = false;
   }
+}
+
+// === SECTION: 全应用背景图（用户上传，本地 IndexedDB 存储，不上传服务器） ===
+// 作用范围：整个窗口，编辑区与预览区文字都浮在图上（两处各加主题色遮罩保证清晰）。
+// 存储：Blob 写入 images 仓库（key=BG_ID），CSS 变量 --bg-image/--bg-scrim/--bg-fit 控制呈现；
+// 遮罩浓度 / 填充方式等轻量设置存 localStorage['app-bg-settings']。
+let appBgUrl = null;   // 当前背景图 object URL（用于 revoke，避免内存泄漏）
+
+function readBgSettings() {
+  try { return JSON.parse(localStorage.getItem('app-bg-settings') || '{}'); } catch (_) { return {}; }
+}
+function saveBgSettings(s) { localStorage.setItem('app-bg-settings', JSON.stringify(s)); }
+
+function applyAppBg(url, settings) {
+  const el = document.getElementById('appBg');
+  const scrim = (settings && settings.scrim != null) ? settings.scrim : 0.7;
+  const fit = (settings && settings.fit) || 'cover';
+  el.style.setProperty('--bg-image', 'url("' + url + '")');
+  el.style.setProperty('--bg-scrim', scrim);
+  el.style.setProperty('--bg-fit', fit);
+  el.classList.add('active');
+  document.body.classList.add('has-app-bg');
+}
+
+async function loadAppBg() {
+  try {
+    await openLibDb();
+    if (!libDb) return;
+    const rec = await idbGetImage(BG_ID);
+    if (!rec || !rec.blob) return;
+    appBgUrl = URL.createObjectURL(rec.blob);
+    applyAppBg(appBgUrl, readBgSettings());
+  } catch (_) { /* 背景缺失不阻断启动 */ }
+}
+
+async function uploadBgFile(file) {
+  if (!file) return;
+  if (!file.type || !file.type.startsWith('image/')) { flash('请选择图片文件'); return; }
+  try {
+    await openLibDb();
+    if (!libDb) { flash('本地存储不可用'); return; }
+    await idbPutImage({ id: BG_ID, blob: file, name: file.name, ts: Date.now() });
+    if (appBgUrl) URL.revokeObjectURL(appBgUrl);
+    appBgUrl = URL.createObjectURL(file);
+    applyAppBg(appBgUrl, readBgSettings());
+    flash('背景图片已应用');
+    // 同步刷新弹窗预览
+    const preview = document.getElementById('bgPreview');
+    if (preview) { preview.style.backgroundImage = 'url("' + appBgUrl + '")'; preview.classList.add('has-img'); }
+  } catch (e) {
+    console.error('[bg] 保存失败', e);
+    flash('背景图片保存失败');
+  }
+}
+
+async function removeAppBg() {
+  try {
+    await openLibDb();
+    if (libDb) await idbDeleteImage(BG_ID);
+  } catch (_) {}
+  const el = document.getElementById('appBg');
+  el.classList.remove('active');
+  document.body.classList.remove('has-app-bg');
+  el.style.removeProperty('--bg-image');
+  el.style.removeProperty('--bg-scrim');
+  el.style.removeProperty('--bg-fit');
+  if (appBgUrl) { URL.revokeObjectURL(appBgUrl); appBgUrl = null; }
+  localStorage.removeItem('app-bg-settings');
+  const preview = document.getElementById('bgPreview');
+  if (preview) { preview.classList.remove('has-img'); preview.style.backgroundImage = ''; }
+  flash('已移除背景图片');
+}
+
+function openBgDialog() {
+  const dlg = document.getElementById('bgModal');
+  const preview = document.getElementById('bgPreview');
+  if (appBgUrl) { preview.style.backgroundImage = 'url("' + appBgUrl + '")'; preview.classList.add('has-img'); }
+  else { preview.classList.remove('has-img'); preview.style.backgroundImage = ''; }
+  const s = readBgSettings();
+  document.getElementById('bgScrim').value = (s.scrim != null) ? s.scrim : 0.7;
+  document.getElementById('bgFit').value = s.fit || 'cover';
+  dlg.hidden = false;
+}
+
+// 实时调节遮罩浓度 / 填充方式（无需重新选图）
+function setBgScrim(v) {
+  const el = document.getElementById('appBg');
+  el.style.setProperty('--bg-scrim', v);
+  const s = readBgSettings(); s.scrim = +v; saveBgSettings(s);
+}
+function setBgFit(v) {
+  const el = document.getElementById('appBg');
+  el.style.setProperty('--bg-fit', v);
+  const s = readBgSettings(); s.fit = v; saveBgSettings(s);
 }
 
 function genId() { return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
