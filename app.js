@@ -431,7 +431,9 @@ function applyMdTheme(mode) {
   document.documentElement.setAttribute('data-md-theme', mode);
   localStorage.setItem('md-mdtheme', mode);
   document.querySelectorAll('[data-act="mdtheme"]').forEach((b) => {
-    b.textContent = (b.dataset.val === mode ? '✓ ' : '') + MD_THEME_LABEL[b.dataset.val];
+    const key = b.dataset.val || '';
+    const label = MD_THEME_LABEL[key] || (key.charAt(0).toUpperCase() + key.slice(1));
+    b.textContent = (key === mode ? '✓ ' : '') + label;
   });
 }
 
