@@ -1863,6 +1863,18 @@ const AI_CFG_KEY = 'md-ai-config';
 function readAiConfig() {
   try { return JSON.parse(localStorage.getItem(AI_CFG_KEY) || '{}'); } catch (_) { return {}; }
 }
+// 把当前使用的 AI 模型名同步到两处 UI 徽标：
+//  - 智能助理菜单项右侧（#aiMenuModel）
+//  - AI 生成浮层标题旁（#aspModel）
+// model 缺省回退 'free'（与 streamAiApi / openAiSettings 的默认保持一致）。
+function updateAiModelBadge() {
+  let model = 'free';
+  try { model = (readAiConfig().model || 'free'); } catch (_) {}
+  const menuEl = document.getElementById('aiMenuModel');
+  if (menuEl) menuEl.textContent = model;
+  const aspEl = document.getElementById('aspModel');
+  if (aspEl) aspEl.textContent = model;
+}
 // 把 fetch 失败（CORS / 混合内容 / 网络）翻译成可操作的提示
 function aiErrorHint(err, endpoint) {
   const m = (err && err.message) || String(err);
@@ -2040,6 +2052,7 @@ function aiRunStream({ label, systemPrompt, promptText, onApply, onComplete }) {
   body.innerHTML = '';
   body.appendChild(caret);
   panel.hidden = false;
+  updateAiModelBadge(); // 生成界面标题旁实时显示当前模型
   if (typeof clearFullAutoTimer === 'function') clearFullAutoTimer(); // 进入新一章：恢复标准脚注、隐藏倒计时条
   applyBtn.disabled = false;
   aiStreamAbort = new AbortController();
@@ -2504,6 +2517,7 @@ function saveAiSettings() {
   const key = $('#aiKey').value.trim();
   if (!key) { toast('请填写 API Key', 'err'); return; }
   try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ endpoint: ep, model: md, apiKey: key })); } catch (_) {}
+  updateAiModelBadge(); // 模型变更后刷新菜单/浮层徽标
   const m = $('#aiSettingsModal');
   if (m) m.hidden = true;
   toast('AI 配置已保存（仅本机）', 'ok');
@@ -2514,6 +2528,7 @@ function resetAiSettings() {
   const defEp = 'https://wx.want.biz/v1/chat/completions';
   const defMd = 'free';
   try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ endpoint: defEp, model: defMd, apiKey: cfg.apiKey || '' })); } catch (_) {}
+  updateAiModelBadge(); // 恢复默认模型后刷新徽标
   const ep = $('#aiEndpoint'), md = $('#aiModel'), key = $('#aiKey');
   if (ep) ep.value = defEp;
   if (md) md.value = defMd;
@@ -2569,6 +2584,8 @@ if (aiModal) {
     else if (e.key === 'Escape') aiModal.hidden = true;
   });
 }
+// 初始渲染一次模型徽标（菜单项右侧 + 生成浮层标题旁）
+updateAiModelBadge();
 
 // 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
 const shareModal = $('#shareModal');
@@ -3092,7 +3109,7 @@ function toggleSubmenu(name) {
 }
 function openMoreMenu(open) {
   closeAllSubmenus();
-  if (open) { moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); }
+  if (open) { moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); updateAiModelBadge(); }
   else { moreMenu.setAttribute('hidden', ''); btnMore.setAttribute('aria-expanded', 'false'); }
 }
 btnMore.addEventListener('click', () => openMoreMenu(moreMenu.hasAttribute('hidden')));

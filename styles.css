@@ -123,6 +123,14 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .menu button:hover .kbd { color: var(--accent-soft); border-color: var(--accent); }
 .menu button:hover { background: var(--bg-soft); color: var(--accent-soft); }
 .menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+/* 智能助理菜单项右侧的当前模型徽标（如 free / gpt-4o） */
+.mi-label { flex: 0 1 auto; }
+.mi-model {
+  flex: 0 0 auto; padding: 1px 7px;
+  font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--accent-soft); background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: 5px; letter-spacing: .3px;
+}
 /* 菜单弹出：轻微淡入 + 上移，更顺滑 */
 .menu:not([hidden]) { animation: menuIn .09s ease-out; }
 @keyframes menuIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -297,6 +305,14 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 .asp-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px;
   padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,.1); }
 .asp-title { font-size: 13px; font-weight: 600; letter-spacing: .3px; opacity: .9; }
+.asp-titlewrap { display: flex; align-items: center; min-width: 0; }
+/* AI 生成浮层标题旁的当前模型徽标（与菜单项一致，便于快速确认用哪款模型） */
+.asp-model {
+  flex: 0 0 auto; padding: 1px 8px; margin-left: 8px;
+  font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #fff; background: rgba(255,255,255,.18);
+  border: 1px solid rgba(255,255,255,.28); border-radius: 6px; letter-spacing: .3px;
+}
 .asp-stop { width: 26px; height: 26px; border-radius: 7px; border: none; cursor: pointer;
   background: rgba(255,255,255,.12); color: #fff; font-size: 11px; line-height: 1; }
 .asp-stop:hover { background: rgba(255,255,255,.22); }
@@ -334,6 +350,7 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 }
 [data-theme="light"] .asp-head, [data-theme="light"] .asp-foot { border-color: rgba(0,0,0,.1); }
 [data-theme="light"] .asp-stop { background: rgba(0,0,0,.08); color: #1c1f24; }
+[data-theme="light"] .asp-model { color: #1c1f24; background: rgba(0,0,0,.06); border-color: rgba(0,0,0,.16); }
 [data-theme="light"] .asp-foot button { border-color: rgba(0,0,0,.18); color: #1c1f24; }
 [data-theme="light"] .asp-foot button:hover { background: rgba(0,0,0,.06); }
 
