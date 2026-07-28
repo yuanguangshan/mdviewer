@@ -2794,6 +2794,17 @@ const NAS_ARCHIVE_DOMAIN = 'knowly.want.biz';
 const NAS_ARCHIVE_HOST = 'https://knowly.want.biz';
 const NAS_MAX_BYTES = 200 * 1024 * 1024;
 
+// NAS 菜单提示：凭据已配置（localStorage 'nas-auth' 非空）则不标注；未配置才显示「（需凭据）」
+function updateNasMenuHint() {
+  const configured = !!localStorage.getItem('nas-auth');
+  const suffix = configured ? '' : '（需凭据）';
+  const dl = document.querySelector('[data-act="nas-download"]');
+  const ul = document.querySelector('[data-act="nas-upload"]');
+  if (dl) dl.textContent = '📥 从 NAS 下载' + suffix;
+  if (ul) ul.textContent = '📤 上传到 NAS' + suffix;
+}
+updateNasMenuHint();
+
 function nasBasicAuth() {
   const auth = localStorage.getItem('nas-auth') || '';
   try { return auth ? 'Basic ' + btoa(auth) : ''; } catch (_) { return ''; }
@@ -2837,6 +2848,7 @@ async function uploadToNas() {
     auth = window.prompt('请输入 NAS 上传凭据（格式 user:password，仅本机保存）：', '') || '';
     if (!auth) { flash('未配置 NAS 凭据，已取消上传'); return; }
     try { localStorage.setItem('nas-auth', auth); } catch (_) {}
+    updateNasMenuHint();   // 凭据已配置，去掉菜单的「（需凭据）」提示
   }
   let authHeader = '';
   try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return; }
@@ -2912,6 +2924,7 @@ async function downloadFromNas(input) {
     auth = window.prompt('请输入 NAS 下载凭据（格式 user:password，仅本机保存）：', '') || '';
     if (!auth) { flash('未配置 NAS 凭据，已取消下载'); return null; }
     try { localStorage.setItem('nas-auth', auth); } catch (_) {}
+    updateNasMenuHint();   // 凭据已配置，去掉菜单的「（需凭据）」提示
   }
   let authHeader = '';
   try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return null; }
