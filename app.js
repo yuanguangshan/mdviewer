@@ -421,9 +421,9 @@ function applyTheme(mode) {
 mql.addEventListener('change', () => { if (themeMode === 'auto') applyTheme('auto'); });
 applyTheme(themeMode);
 
-// === SECTION: 预览主题：github / onedark / solarized / nord（独立于 app 主题） ===
-const MD_THEME_CYCLE = ['github', 'onedark', 'solarized', 'nord'];
-const MD_THEME_LABEL = { github: 'GitHub', onedark: 'One Dark', solarized: 'Solarized', nord: 'Nord' };
+// === SECTION: 预览主题：github / onedark / solarized / nord / gruvbox / dracula / monokai / ayu / catppuccin / sepia（独立于 app 主题） ===
+const MD_THEME_CYCLE = ['github', 'onedark', 'solarized', 'nord', 'gruvbox', 'dracula', 'monokai', 'ayu', 'catppuccin', 'sepia'];
+const MD_THEME_LABEL = { github: 'GitHub', onedark: 'One Dark', solarized: 'Solarized', nord: 'Nord', gruvbox: 'Gruvbox', dracula: 'Dracula', monokai: 'Monokai', ayu: 'Ayu', catppuccin: 'Catppuccin', sepia: 'Sepia' };
 let mdThemeMode = localStorage.getItem('md-mdtheme') || 'github';
 if (!MD_THEME_CYCLE.includes(mdThemeMode)) mdThemeMode = 'github';
 function applyMdTheme(mode) {
