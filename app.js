@@ -2377,11 +2377,29 @@ const AI_ACTIONS = {
     if (/<!--\s*ai-epilogue\s*-->/.test(doc)) { toast('终章后记已存在', 'info'); return; }
     const titleMatch = doc.match(/^#\s+(.+)$/m);
     const bookTitle = titleMatch ? titleMatch[1].trim() : '本书';
+
+    // 【修复】喂给 AI「全书大纲」+「各章 💡 独思时刻摘录」作上下文。
+    // 修复前只传了书名，AI 没看过正文/大纲，"最痛苦的决策""呼应独思时刻"等要求只能凭空幻觉，导致后记与正文毫无联系。
+    const firstMark = doc.search(/<!--\s*ai-chapter:\d+\s*-->/);
+    const outlineContext = (firstMark === -1 ? doc : doc.slice(0, firstMark)).trim().slice(0, 3000);
+    // 抽取正文里各章的「💡 独思时刻」，供后记真实呼应（而非脑补）；每条取首行、限长，最多 12 条防 token 超限
+    const moments = [];
+    const mRe = /独思时刻[：:]\s*(.+)/g;
+    let mm;
+    while ((mm = mRe.exec(doc)) && moments.length < 12) {
+      const t = mm[1].trim().slice(0, 120);
+      if (t) moments.push('· ' + t);
+    }
+    const momentContext = moments.length
+      ? '\n\n【书中「💡 独思时刻」摘录（可任选一个真实呼应，不要复述原文）】\n' + moments.join('\n')
+      : '';
+
     const promptText = '这是一本名为《' + bookTitle + '》的商业书籍，所有正文章节已经写完。\n' +
-      '请以前书中设定的「作者」第一人称口吻，写一篇约 500 字的「终章·后记」：\n' +
+      '【全书大纲参考】\n' + outlineContext + momentContext + '\n\n' +
+      '请基于以上书籍核心内容，以前书中设定的「作者」第一人称口吻，写一篇约 500 字的「终章·后记」：\n' +
       '· 以作者个人口吻对读者掏心窝子地说一段话，不要用教科书或 AI 助手的口吻；\n' +
-      '· 必须包含：创作过程中最痛苦的一个决策、最意外的一个收获；\n' +
-      '· 可以呼应书中某个「💡 独思时刻」，但要用作者自己的反思语气，而非重复正文；\n' +
+      '· 必须包含：基于本书核心主题在创作过程中最痛苦的一个决策、最意外的一个收获；\n' +
+      '· 请真实地呼应大纲中的某个具体观点或上面某个「💡 独思时刻」，用作者自己的反思语气，而非重复正文；\n' +
       '· 允许留白、允许不确定、允许真实的人类情绪（犹豫、后悔、兴奋）；禁用空洞词（赋能、降维打击、范式转移、底层逻辑、超级个体、终极壁垒、认知升维）；\n' +
       '· 使用 Markdown，以二级标题「## 终章·后记」开头，只输出后记正文。';
     const systemPrompt = '你就是这本书的作者，一位有真实商业实战经验、有脾气、有偏见的从业者。现在彻底放下「AI 助手」的身份，用你本人的口吻写作。' +
