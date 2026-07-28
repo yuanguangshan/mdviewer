@@ -2642,8 +2642,9 @@ if (aiModal) {
     bgModal.addEventListener('click', (e) => { if (e.target === bgModal) bgModal.hidden = true; });
     bgModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') bgModal.hidden = true; });
   }
-  // 启动：若已设置过背景图则自动恢复
-  loadAppBg();
+  // 启动：若已设置过背景图则自动恢复（setTimeout 确保在模块顶层执行完、libDb 初始化后再跑，
+  // 否则顶层同步调用会撞上 libDb 的暂时性死区而抛 ReferenceError）
+  setTimeout(loadAppBg, 0);
 
 // 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
 const shareModal = $('#shareModal');
@@ -3784,7 +3785,7 @@ async function loadAppBg() {
     if (!rec || !rec.blob) return;
     appBgUrl = URL.createObjectURL(rec.blob);
     applyAppBg(appBgUrl, readBgSettings());
-  } catch (_) { /* 背景缺失不阻断启动 */ }
+  } catch (e) { console.error('[bg] loadAppBg 失败', (e && e.message) || String(e)); }
 }
 
 async function uploadBgFile(file) {
