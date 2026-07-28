@@ -33,7 +33,7 @@
     <header class="toolbar">
       <div class="toolbar-left">
       <div class="brand"><svg class="brand-logo" viewBox="0 0 512 512" width="26" height="26" role="img" aria-label="mdviewer"><defs><linearGradient id="brandGrad1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#4f46e5"/></linearGradient><linearGradient id="brandGrad2" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs><rect x="140" y="110" width="80" height="40" rx="8" fill="url(#brandGrad1)"/><rect x="292" y="110" width="80" height="40" rx="8" fill="url(#brandGrad1)"/><path d="M170 210h172c15 0 25 12 18 25l-45 80c-8 14-26 22-42 22h-58c-16 0-34-8-42-22l-45-80c-7-13 3-25 18-25z" fill="none" stroke="url(#brandGrad2)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/><circle class="brand-dot" cx="256" cy="350" r="18" fill="#e6e9ef"/></svg><span>mdviewer</span></div>
-      <button id="btnLibrary" class="btn icon lib-toggle" title="文库（本地文档库）" aria-label="文库" aria-expanded="false">🗄️<span class="lib-count" id="libCount" hidden>0</span></button>
+      <button id="btnLibrary" class="btn icon lib-toggle" title="文库（本地文档）" aria-label="文库" aria-expanded="false">🗄️<span class="lib-count" id="libCount" hidden>0</span></button>
       <button id="btnToc" class="btn icon toc-toggle" title="目录（大纲导航 · 阅读长文时快速跳转章节）" aria-label="目录" aria-expanded="false">📖</button>
       </div>
       <div class="actions">
@@ -51,24 +51,24 @@
             <button role="menuitem" data-act="rename">✏️ 重命名</button>
             <button role="menuitem" data-sub="ai" aria-haspopup="true" aria-expanded="false">✨ AI 智能助理 ▸</button>
             <button role="menuitem" data-action="fmtImage">🖼 插入图片</button>
-            <button role="menuitem" data-act="match-podcast">🎙️ 插入播客</button>
-            <button role="menuitem" data-act="nas-download">☁️ 从NAS下载</button>
+            <button role="menuitem" data-act="match-podcast">🎧 插入播客播放器</button>
+            <button role="menuitem" data-act="nas-download">📥 从 NAS 下载（需凭据）</button>
             <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
             <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题设置 ▸</button>
             <div class="menu-sep"></div>
 
             <!-- 文档操作 -->
-            <button role="menuitem" data-act="addtolib">📥 添加到文档库</button>
+            <button role="menuitem" data-act="addtolib">📚 添加到文库</button>
             <button role="menuitem" data-act="publish-blog">📝 发布到博客</button>
-            <button role="menuitem" data-act="publish-podcast">🎙️ 一键转播客</button>
-            <button role="menuitem" data-act="nas-upload">☁️ 上传到NAS</button>
-            <button role="menuitem" data-act="md">💾 导出Markdown</button>
+            <button role="menuitem" data-act="publish-podcast">🎙️ 文档转播客</button>
+            <button role="menuitem" data-act="nas-upload">📤 上传到 NAS（需凭据）</button>
+            <button role="menuitem" data-act="md">⬇️ 导出 Markdown</button>
             <button role="menuitem" data-act="txt">📃 导出 txt</button>
             <button role="menuitem" data-act="share-r2">🔗 生成分享链接</button>
             <div class="menu-sep"></div>
 
             <!-- 复制与格式 -->
-            <button role="menuitem" data-act="copytext">📋 复制文本</button>
+            <button role="menuitem" data-act="copytext">📋 复制纯文本</button>
             <button role="menuitem" data-act="copymd">📋 复制Markdown</button>
             <button role="menuitem" data-sub="format" aria-haspopup="true" aria-expanded="false">🅰️ 格式 ▸</button>
             <button role="menuitem" data-sub="settings" aria-haspopup="true" aria-expanded="false">⚙️ 开关设置 ▸</button>
@@ -129,7 +129,7 @@
 
           <!-- 二级菜单：AI 智能助理 -->
           <div class="menu sub" id="sub-ai" role="menu" aria-label="AI 智能助理" hidden>
-            <button role="menuitem" data-action="aiSummary">📝 全文总结摘要</button>
+            <button role="menuitem" data-action="aiSummary">🗒️ 全文总结摘要</button>
             <button role="menuitem" data-action="aiPolish">✨ 润色选中文字</button>
             <button role="menuitem" data-action="aiExpand">📈 扩写选中文字</button>
             <button role="menuitem" data-action="aiTranslate">🌐 翻译为英文</button>
@@ -178,7 +178,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v3.0.11</span>
+      <span class="version">v3.0.12</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
