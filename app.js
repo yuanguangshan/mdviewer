@@ -432,8 +432,11 @@ function applyMdTheme(mode) {
   localStorage.setItem('md-mdtheme', mode);
   document.querySelectorAll('[data-act="mdtheme"]').forEach((b) => {
     const key = b.dataset.val || '';
-    const label = MD_THEME_LABEL[key] || (key.charAt(0).toUpperCase() + key.slice(1));
-    b.textContent = (key === mode ? '✓ ' : '') + label;
+    // 标签优先取自按钮自身的 HTML 文本（首次调用时缓存到 dataset.label），
+    // 这样即使 JS 常量缺失或 SW 缓存了旧 app.js，标签也始终跟随 HTML，绝不为 undefined。
+    if (!b.dataset.label) b.dataset.label = (b.textContent || '').replace(/^✓\s*/, '');
+    const base = b.dataset.label || MD_THEME_LABEL[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : '');
+    b.textContent = (key === mode ? '✓ ' : '') + base;
   });
 }
 
