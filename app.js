@@ -2654,8 +2654,8 @@ if (aiModal) {
   // 启动：若已设置过背景图则自动恢复（setTimeout 确保在模块顶层执行完、libDb 初始化后再跑，
   // 否则顶层同步调用会撞上 libDb 的暂时性死区而抛 ReferenceError）
   setTimeout(loadAppBg, 0);
-  // 按用户配置构建格式刷按钮（纯 DOM/CSS，无外部依赖，可直接同步执行）
-  buildFormatBrush();
+  // 按用户配置构建格式刷按钮（FB_TOOLS 定义在文件更靠后的位置，顶层同步调用会撞 TDZ，故延迟到下一拍）
+  setTimeout(buildFormatBrush, 0);
 
 // 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
 const shareModal = $('#shareModal');
@@ -2916,9 +2916,8 @@ function loadFbConfig() {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return FB_DEFAULT.slice();
     const valid = FB_TOOLS.map((t) => t.id);
-    const filtered = arr.filter((id) => valid.includes(id));
-    valid.forEach((id) => { if (!filtered.includes(id)) filtered.push(id); }); // 补齐遗漏项（防御）
-    return filtered;
+    // 仅保留仍有效的 id，保持用户保存的顺序；不重新追加被取消勾选的项
+    return arr.filter((id) => valid.includes(id));
   } catch (_) { return FB_DEFAULT.slice(); }
 }
 function saveFbConfig(ids) {
