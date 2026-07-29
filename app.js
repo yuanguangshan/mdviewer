@@ -2278,14 +2278,34 @@ const AI_ACTIONS = {
     aiProcessSelection('将以下文本准确翻译为地道英文，保留 Markdown 格式，只输出译文：', '翻译');
   },
   // 按提示词生成文章，流式打字机展示，结束后插入光标处
+  // 行为：若已选中文字，则直接把选区作为提示词发送（不弹窗）；无选区时才询问用户
   aiGenerate() {
-    const topic = window.prompt('请输入主题或提示词：', '');
-    if (!topic) { toast('已取消', 'info'); return; }
+    // 必须在最开头捕获选区（浮层/应用按钮会夺走焦点），且不可在 onApply 里二次读取
+    const s = editor.selectionStart, e = editor.selectionEnd;
+    const selected = editor.value.slice(s, e).trim();
+    let topic;
+    if (selected) {
+      topic = selected;                 // 有选中：选区即提示词，直接发送
+    } else {
+      topic = window.prompt('请输入主题或提示词：', '');
+      if (!topic) { toast('已取消', 'info'); return; }
+    }
     aiRunStream({
       label: 'AI 生成',
       systemPrompt: '你是一名专业的写作助手和 Markdown 排版专家。请根据用户给出的主题，撰写一篇结构清晰、Markdown 格式的中文文章（含标题、小节、要点），只输出正文：',
       promptText: topic,
-      onApply: (full) => { insertAtCursor(full + '\n\n'); toast('AI 已生成并插入', 'ok'); }
+      onApply: (full) => {
+        const text = full + '\n\n';
+        // 有选区：用生成结果替换选区（选区本身即提示词种子）；无选区：插入光标处
+        if (e > s) {
+          editor.value = editor.value.slice(0, s) + text + editor.value.slice(e);
+          editor.selectionStart = editor.selectionEnd = s + text.length;
+        } else {
+          insertAtCursor(text);
+        }
+        afterChange();
+        toast('AI 已生成并插入', 'ok');
+      }
     });
   },
   // 策划书籍大纲：基于选中文字（主题/素材）生成结构化大纲，流式展示后一键插入
