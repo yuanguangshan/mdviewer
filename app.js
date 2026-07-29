@@ -2642,9 +2642,20 @@ if (aiModal) {
     bgModal.addEventListener('click', (e) => { if (e.target === bgModal) bgModal.hidden = true; });
     bgModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') bgModal.hidden = true; });
   }
+  // 自定义格式刷弹窗
+  const fbCustModal = document.getElementById('fbCustomizeModal');
+  if (fbCustModal) {
+    document.getElementById('fbCustSave').addEventListener('click', saveFbCustomize);
+    document.getElementById('fbCustReset').addEventListener('click', resetFbCustomize);
+    document.getElementById('fbCustClose').addEventListener('click', closeFbCustomize);
+    fbCustModal.addEventListener('click', (e) => { if (e.target === fbCustModal) closeFbCustomize(); });
+    fbCustModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFbCustomize(); });
+  }
   // 启动：若已设置过背景图则自动恢复（setTimeout 确保在模块顶层执行完、libDb 初始化后再跑，
   // 否则顶层同步调用会撞上 libDb 的暂时性死区而抛 ReferenceError）
   setTimeout(loadAppBg, 0);
+  // 按用户配置构建格式刷按钮（纯 DOM/CSS，无外部依赖，可直接同步执行）
+  buildFormatBrush();
 
 // 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
 const shareModal = $('#shareModal');
@@ -2832,23 +2843,26 @@ if (aiToolbar) {
   });
 }
 
-// 点格式刷按钮：还原选区 → 套用对应格式（AI 按钮则展开 AI 浮层）
+// 点格式刷按钮：还原选区 → 套用对应格式 / AI 动作（__ai 展开完整 AI 浮层，__customize 打开自定义）
 if (formatBrush) {
   formatBrush.addEventListener('mousedown', (e) => e.preventDefault()); // 防止抢焦点导致选区丢失
   formatBrush.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-fmt]');
+    const btn = e.target.closest('button[data-tool]');
     if (!btn) return;
-    const fmt = btn.dataset.fmt;
-    if (fmt === 'ai') {            // 展开 AI 智能助理浮层
+    const tool = btn.dataset.tool;
+    if (tool === '__customize') { openFbCustomize(); return; }
+    if (tool === '__ai') {        // 展开完整 AI 智能助理浮层
       hideFormatBrush();
       editor.focus();
       showAiToolbar();
       return;
     }
+    const kind = btn.dataset.kind;
     hideFormatBrush();
     editor.focus();
-    editor.setSelectionRange(fmtSel.start, fmtSel.end);
-    if (FORMAT_ACTIONS && FORMAT_ACTIONS[fmt]) FORMAT_ACTIONS[fmt]();
+    if (fmtSel) editor.setSelectionRange(fmtSel.start, fmtSel.end);
+    if (kind === 'ai') { if (AI_ACTIONS && AI_ACTIONS[tool]) AI_ACTIONS[tool](); }
+    else if (kind === 'format') { if (FORMAT_ACTIONS && FORMAT_ACTIONS[tool]) FORMAT_ACTIONS[tool](); }
   });
 }
 
@@ -2859,6 +2873,118 @@ document.addEventListener('mousedown', (ev) => {
 });
 window.addEventListener('scroll', () => { hideAiToolbar(); hideFormatBrush(); }, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideAiToolbar(); hideFormatBrush(); } });
+
+// === SECTION: 格式刷自定义（可勾选显示哪些工具，含常用 AI 按钮） ===
+const FB_KEY = 'md-format-brush';
+// 主列表：决定渲染顺序与可选范围；group 用于分组（fmt 文本格式 / ai AI 动作）
+const FB_TOOLS = [
+  // —— 文本格式 ——
+  { id: 'fmtBold',   label: 'B',    title: '加粗 (Ctrl+B)',     kind: 'format', group: 'fmt' },
+  { id: 'fmtItalic', label: 'I',    title: '斜体 (Ctrl+I)',     kind: 'format', group: 'fmt' },
+  { id: 'fmtCode',   label: '</>',  title: '行内代码 (Ctrl+E)', kind: 'format', group: 'fmt' },
+  { id: 'fmtLink',   label: '🔗',   title: '链接 (Ctrl+K)',     kind: 'format', group: 'fmt' },
+  { id: 'fmtImage',  label: '🖼',   title: '图片',               kind: 'format', group: 'fmt' },
+  { id: 'fmtQuote',  label: '❝',    title: '引用',               kind: 'format', group: 'fmt' },
+  { id: 'fmtUl',     label: '•',    title: '无序列表',           kind: 'format', group: 'fmt' },
+  { id: 'fmtOl',     label: '1.',   title: '有序列表',           kind: 'format', group: 'fmt' },
+  { id: 'fmtH1',     label: 'H1',   title: '一级标题',           kind: 'format', group: 'fmt' },
+  { id: 'fmtH2',     label: 'H2',   title: '二级标题',           kind: 'format', group: 'fmt' },
+  { id: 'fmtH3',     label: 'H3',   title: '三级标题',           kind: 'format', group: 'fmt' },
+  { id: 'fmtH4',     label: 'H4',   title: '四级标题',           kind: 'format', group: 'fmt' },
+  { id: 'fmtH5',     label: 'H5',   title: '五级标题',           kind: 'format', group: 'fmt' },
+  { id: 'fmtH6',     label: 'H6',   title: '六级标题',           kind: 'format', group: 'fmt' },
+  // —— AI 动作 ——
+  { id: 'aiPolish',          label: '✨ 润色',  title: '润色选中文字',          kind: 'ai', group: 'ai' },
+  { id: 'aiExpand',          label: '📈 扩写',  title: '扩写选中文字',          kind: 'ai', group: 'ai' },
+  { id: 'aiTranslate',       label: '🌐 翻译',  title: '翻译为英文',            kind: 'ai', group: 'ai' },
+  { id: 'aiSummary',         label: '📝 总结',  title: '全文总结摘要',          kind: 'ai', group: 'ai' },
+  { id: 'aiGenerate',        label: '💡 生成',  title: '按提示词生成',          kind: 'ai', group: 'ai' },
+  { id: 'aiBookOutline',     label: '📖 大纲',  title: '策划书籍大纲',          kind: 'ai', group: 'ai' },
+  { id: 'aiWriteNextChapter',label: '✍️ 下一章',title: '按大纲续写下一章',      kind: 'ai', group: 'ai' },
+  { id: 'aiWriteEpilogue',   label: '📜 后记',  title: '生成终章后记',          kind: 'ai', group: 'ai' },
+  { id: 'aiMindmap',         label: '🧠 脑图',  title: '生成思维导图',          kind: 'ai', group: 'ai' },
+  { id: 'aiRewriteZhihu',    label: '📘 知乎',  title: '转写为知乎体',          kind: 'ai', group: 'ai' },
+  { id: 'aiRewriteTwitter',  label: '🐦 Thread',title: '转写为 Twitter Thread',kind: 'ai', group: 'ai' },
+];
+// 默认显示：常用文本格式（H1–H3）+ 几个常用 AI 按钮
+const FB_DEFAULT = ['fmtBold', 'fmtItalic', 'fmtCode', 'fmtLink', 'fmtImage', 'fmtQuote', 'fmtUl', 'fmtOl', 'fmtH1', 'fmtH2', 'fmtH3', 'aiPolish', 'aiExpand', 'aiSummary', 'aiWriteNextChapter'];
+
+function loadFbConfig() {
+  try {
+    const raw = localStorage.getItem(FB_KEY);
+    if (!raw) return FB_DEFAULT.slice();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return FB_DEFAULT.slice();
+    const valid = FB_TOOLS.map((t) => t.id);
+    const filtered = arr.filter((id) => valid.includes(id));
+    valid.forEach((id) => { if (!filtered.includes(id)) filtered.push(id); }); // 补齐遗漏项（防御）
+    return filtered;
+  } catch (_) { return FB_DEFAULT.slice(); }
+}
+function saveFbConfig(ids) {
+  try { localStorage.setItem(FB_KEY, JSON.stringify(ids)); } catch (_) {}
+}
+// 按配置动态生成格式刷按钮，分组之间自动插分隔线
+function buildFormatBrush() {
+  const box = document.getElementById('fbButtons');
+  if (!box) return;
+  const ids = loadFbConfig();
+  let html = '';
+  let lastGroup = null;
+  ids.forEach((id) => {
+    const t = FB_TOOLS.find((x) => x.id === id);
+    if (!t) return;
+    if (lastGroup !== null && lastGroup !== t.group) html += '<span class="fb-sep" aria-hidden="true"></span>';
+    lastGroup = t.group;
+    const cls = t.kind === 'ai' ? ' class="fb-ai"' : '';
+    html += '<button type="button" data-tool="' + id + '" data-kind="' + t.kind + '"' + cls + ' title="' + t.title + '">' + t.label + '</button>';
+  });
+  box.innerHTML = html;
+}
+// 打开自定义弹窗：按分组渲染复选框
+function openFbCustomize() {
+  const modal = document.getElementById('fbCustomizeModal');
+  if (!modal) return;
+  const box = document.getElementById('fbCustList');
+  if (box) {
+    const checked = new Set(loadFbConfig());
+    const groups = [{ g: 'fmt', label: '文本格式' }, { g: 'ai', label: 'AI 动作' }];
+    let html = '';
+    groups.forEach((grp) => {
+      html += '<div class="fb-cust-group"><div class="fb-cust-glabel">' + grp.label + '</div>';
+      FB_TOOLS.filter((t) => t.group === grp.g).forEach((t) => {
+        const on = checked.has(t.id) ? ' checked' : '';
+        html += '<label class="fb-opt"><input type="checkbox" data-fb="' + t.id + '"' + on + '>'
+              + '<span class="fb-opt-text"><b>' + t.label + '</b><small>' + t.title + '</small></span></label>';
+      });
+      html += '</div>';
+    });
+    box.innerHTML = html;
+  }
+  modal.hidden = false;
+}
+function closeFbCustomize() {
+  const modal = document.getElementById('fbCustomizeModal');
+  if (modal) modal.hidden = true;
+}
+function saveFbCustomize() {
+  const modal = document.getElementById('fbCustomizeModal');
+  if (!modal) return;
+  const ids = [];
+  FB_TOOLS.forEach((t) => {                        // 按主列表顺序收集勾选项
+    const c = modal.querySelector('input[data-fb="' + t.id + '"]');
+    if (c && c.checked) ids.push(t.id);
+  });
+  saveFbConfig(ids);
+  buildFormatBrush();
+  closeFbCustomize();
+  if (typeof flash === 'function') flash('格式刷已更新');
+}
+function resetFbCustomize() {
+  saveFbConfig(FB_DEFAULT.slice());
+  buildFormatBrush();
+  openFbCustomize();                                // 刷新勾选状态
+}
 
 
 // === SECTION: NAS 同步：上传 / 下载 ===
@@ -3215,6 +3341,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'layout-swap') toggleLayoutSwap();
   else if (act === 'layout-reset') resetLayout();
   else if (act === 'bg') openBgDialog();
+  else if (act === 'fb-customize') openFbCustomize();
 });
 
 // === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===

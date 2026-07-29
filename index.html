@@ -77,6 +77,7 @@
             <button role="menuitem" data-act="copytext">📋 复制纯文本</button>
             <button role="menuitem" data-act="copymd">📋 复制Markdown</button>
             <button role="menuitem" data-sub="format" aria-haspopup="true" aria-expanded="false">🅰️ 格式 ▸</button>
+            <button role="menuitem" data-act="fb-customize">🎨 自定义格式刷</button>
             <button role="menuitem" data-sub="settings" aria-haspopup="true" aria-expanded="false">⚙️ 开关设置 ▸</button>
             <div class="menu-label" role="presentation">其它</div>
             <button role="menuitem" data-act="copy">📋 复制 html</button>
@@ -184,7 +185,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v3.0.18</span>
+      <span class="version">v3.0.19</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -270,18 +271,12 @@
   </div>
 
   <!-- 选中文字时浮出的「格式刷」工具条（WPS 风格，复用 floating-toolbar 基类） -->
+  <!-- 选中文字时浮出的「格式刷」工具条（WPS 风格）：按钮由 JS 按用户配置动态生成 -->
   <div id="formatBrush" class="floating-toolbar" hidden role="toolbar" aria-label="格式刷">
-    <button type="button" data-fmt="fmtBold" title="加粗 (Ctrl+B)"><b>B</b></button>
-    <button type="button" data-fmt="fmtItalic" title="斜体 (Ctrl+I)"><i>I</i></button>
-    <button type="button" data-fmt="fmtCode" title="行内代码 (Ctrl+E)">&lt;/&gt;</button>
-    <button type="button" data-fmt="fmtLink" title="链接 (Ctrl+K)">🔗</button>
-    <button type="button" data-fmt="fmtImage" title="图片">🖼</button>
-    <button type="button" data-fmt="fmtQuote" title="引用">❝</button>
-    <button type="button" data-fmt="fmtUl" title="无序列表">•</button>
-    <button type="button" data-fmt="fmtOl" title="有序列表">1.</button>
-    <button type="button" data-fmt="fmtH1" title="一级标题">H1</button>
+    <div id="fbButtons" class="fb-buttons"></div>
     <span class="fb-sep" aria-hidden="true"></span>
-    <button type="button" data-fmt="ai" class="fb-ai" title="AI 智能助理">✨ AI</button>
+    <button type="button" class="fb-ai" data-tool="__ai" title="更多 AI 功能">✨ AI</button>
+    <button type="button" class="fb-gear" data-tool="__customize" title="自定义格式刷">⚙</button>
   </div>
 
   <!-- AI 流式打字机浮层：实时显示生成内容，结束/停止后可"应用" -->
@@ -330,6 +325,20 @@
           <button id="aiSettingsSave" type="button" class="primary">保存</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- 格式刷自定义弹窗：勾选要在格式刷上显示的常用工具（文本格式 + AI 动作） -->
+  <div class="modal" id="fbCustomizeModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="自定义格式刷">
+      <div class="modal-title">🎨 自定义格式刷</div>
+      <p class="modal-desc">勾选你常用的工具，保存后会在划词格式刷上直接显示（左侧文本格式，右侧 AI 动作）。</p>
+      <div id="fbCustList" class="fb-cust-list"></div>
+      <div class="modal-actions">
+        <button id="fbCustReset" type="button" title="恢复默认（常用文本格式 + 几个 AI 按钮）">恢复默认</button>
+        <button id="fbCustClose" type="button">取消</button>
+        <button id="fbCustSave" type="button" class="primary">保存</button>
+      </div>
     </div>
   </div>
 

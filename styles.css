@@ -287,6 +287,24 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 .floating-toolbar .fb-ai { color: #ffd479; }
 [data-theme="light"] .floating-toolbar .fb-sep { background: rgba(0,0,0,.14); }
 [data-theme="light"] .floating-toolbar .fb-ai { color: #b8860b; }
+/* 格式刷动态按钮容器 + 齿轮按钮 */
+.floating-toolbar .fb-buttons { display: inline-flex; align-items: stretch; }
+.floating-toolbar .fb-gear { opacity: .72; font-size: 13px; padding: 0 8px; }
+.floating-toolbar .fb-gear:hover { opacity: 1; background: rgba(255,255,255,.18); }
+[data-theme="light"] .floating-toolbar .fb-gear:hover { background: rgba(0,0,0,.08); }
+
+/* 自定义格式刷弹窗 */
+#fbCustomizeModal .modal-box { max-width: 660px; }
+.fb-cust-list { display: flex; flex-direction: column; gap: 16px; max-height: 62dvh; overflow: auto; padding-right: 4px; }
+.fb-cust-group { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 10px; }
+.fb-cust-glabel { grid-column: 1 / -1; font-size: 12px; font-weight: 600; opacity: .7; margin-bottom: 2px; letter-spacing: .3px; }
+.fb-opt { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 8px; cursor: pointer; user-select: none; }
+.fb-opt:hover { background: rgba(255,255,255,.06); }
+[data-theme="light"] .fb-opt:hover { background: rgba(0,0,0,.05); }
+.fb-opt input { width: 15px; height: 15px; flex: 0 0 auto; accent-color: var(--accent); }
+.fb-opt-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.fb-opt-text b { font-size: 13px; font-weight: 600; }
+.fb-opt-text small { opacity: .55; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toast.toast-info { border-color: var(--accent-soft); }
 
 /* ---------- AI 流式打字机浮层 ---------- */
