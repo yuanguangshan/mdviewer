@@ -2676,6 +2676,8 @@ if (aiModal) {
   setTimeout(loadAppBg, 0);
   // 按用户配置构建格式刷按钮（FB_TOOLS 定义在文件更靠后的位置，顶层同步调用会撞 TDZ，故延迟到下一拍）
   setTimeout(buildFormatBrush, 0);
+  // 构建左上角 logo 快捷菜单（QUICK_CATALOG 同样定义在文件更靠后，延迟到下一拍避免 TDZ）
+  setTimeout(buildQuickMenu, 0);
 
 // 协作分享弹窗：复制按钮 / 完成 / 遮罩 / Esc 关闭
 const shareModal = $('#shareModal');
@@ -2892,7 +2894,7 @@ document.addEventListener('mousedown', (ev) => {
   if (formatBrush && !formatBrush.hidden && !formatBrush.contains(ev.target)) hideFormatBrush();
 });
 window.addEventListener('scroll', () => { hideAiToolbar(); hideFormatBrush(); }, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideAiToolbar(); hideFormatBrush(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideAiToolbar(); hideFormatBrush(); closeQuickMenu(); closeQuickCustomize(); } });
 
 // === SECTION: 格式刷自定义（可勾选显示哪些工具，含常用 AI 按钮） ===
 const FB_KEY = 'md-format-brush';
@@ -3004,6 +3006,193 @@ function resetFbCustomize() {
   buildFormatBrush();
   openFbCustomize();                                // 刷新勾选状态
 }
+
+
+// === SECTION: 左上角 logo 快捷菜单（右上角「⋯」菜单的可定制子集） ===
+const QUICK_KEY = 'md-quick-menu';
+// 候选目录：取自右上角「⋯」菜单的叶节点动作（data-action 走 TEXT/AI/FORMAT_ACTIONS，data-act 走 handleDataAct）
+const QUICK_CATALOG = [
+  { id: 'searchReplace', label: '🔍 查找与替换', kind: 'action', act: 'searchReplace', group: 'general' },
+  { id: 'rename', label: '✏️ 重命名', kind: 'act', act: 'rename', group: 'general' },
+  { id: 'bg', label: '🖼️ 设置背景图片', kind: 'act', act: 'bg', group: 'general' },
+  { id: 'fmtImage', label: '🖼 插入图片', kind: 'action', act: 'fmtImage', group: 'doc' },
+  { id: 'match-podcast', label: '🎧 插入播客播放器', kind: 'act', act: 'match-podcast', group: 'doc' },
+  { id: 'nas-download', label: '📥 从 NAS 下载', kind: 'act', act: 'nas-download', group: 'doc' },
+  { id: 'addtolib', label: '📚 添加到文库', kind: 'act', act: 'addtolib', group: 'doc' },
+  { id: 'publish-blog', label: '📝 发布到博客', kind: 'act', act: 'publish-blog', group: 'doc' },
+  { id: 'publish-podcast', label: '🎙️ 文档转播客', kind: 'act', act: 'publish-podcast', group: 'doc' },
+  { id: 'nas-upload', label: '📤 上传到 NAS', kind: 'act', act: 'nas-upload', group: 'doc' },
+  { id: 'md', label: '⬇️ 导出 Markdown', kind: 'act', act: 'md', group: 'export' },
+  { id: 'txt', label: '📃 导出为 txt 文件', kind: 'act', act: 'txt', group: 'export' },
+  { id: 'html', label: '📄 导出 html', kind: 'act', act: 'html', group: 'export' },
+  { id: 'share-r2', label: '🔗 生成分享链接', kind: 'act', act: 'share-r2', group: 'export' },
+  { id: 'copytext', label: '📋 复制纯文本', kind: 'act', act: 'copytext', group: 'export' },
+  { id: 'copymd', label: '📋 复制Markdown', kind: 'act', act: 'copymd', group: 'export' },
+  { id: 'copy', label: '📋 复制 html', kind: 'act', act: 'copy', group: 'export' },
+  { id: 'theme', label: '🌗 切换深/浅/跟随', kind: 'act', act: 'theme', group: 'look' },
+  { id: 'fmtBold', label: '🅱 加粗', kind: 'action', act: 'fmtBold', group: 'fmt' },
+  { id: 'fmtItalic', label: '🇮 斜体', kind: 'action', act: 'fmtItalic', group: 'fmt' },
+  { id: 'fmtCode', label: '⌨️ 行内代码', kind: 'action', act: 'fmtCode', group: 'fmt' },
+  { id: 'fmtLink', label: '🔗 链接', kind: 'action', act: 'fmtLink', group: 'fmt' },
+  { id: 'fmtQuote', label: '❝ 引用', kind: 'action', act: 'fmtQuote', group: 'fmt' },
+  { id: 'fmtUl', label: '• 无序列表', kind: 'action', act: 'fmtUl', group: 'fmt' },
+  { id: 'fmtOl', label: '1. 有序列表', kind: 'action', act: 'fmtOl', group: 'fmt' },
+  { id: 'fmtH1', label: 'H1 一级标题', kind: 'action', act: 'fmtH1', group: 'fmt' },
+  { id: 'fmtH2', label: 'H2 二级标题', kind: 'action', act: 'fmtH2', group: 'fmt' },
+  { id: 'fmtH3', label: 'H3 三级标题', kind: 'action', act: 'fmtH3', group: 'fmt' },
+  { id: 'aiSummary', label: '🗒️ 全文总结摘要', kind: 'action', act: 'aiSummary', group: 'ai' },
+  { id: 'aiPolish', label: '✨ 润色选中文字', kind: 'action', act: 'aiPolish', group: 'ai' },
+  { id: 'aiExpand', label: '📈 扩写选中文字', kind: 'action', act: 'aiExpand', group: 'ai' },
+  { id: 'aiTranslate', label: '🌐 翻译为英文', kind: 'action', act: 'aiTranslate', group: 'ai' },
+  { id: 'aiGenerate', label: '💡 按提示词生成', kind: 'action', act: 'aiGenerate', group: 'ai' },
+  { id: 'aiBookOutline', label: '📖 策划书籍大纲', kind: 'action', act: 'aiBookOutline', group: 'ai' },
+  { id: 'aiWriteNextChapter', label: '✍️ 续写下一章', kind: 'action', act: 'aiWriteNextChapter', group: 'ai' },
+  { id: 'aiWriteEpilogue', label: '📜 终章后记', kind: 'action', act: 'aiWriteEpilogue', group: 'ai' },
+  { id: 'aiMindmap', label: '🧠 生成思维导图', kind: 'action', act: 'aiMindmap', group: 'ai' },
+  { id: 'aiRewriteZhihu', label: '📘 知乎体', kind: 'action', act: 'aiRewriteZhihu', group: 'ai' },
+  { id: 'aiRewriteTwitter', label: '🐦 Twitter Thread', kind: 'action', act: 'aiRewriteTwitter', group: 'ai' },
+  { id: 'aiSettings', label: '⚙️ AI 设置（BYOK）', kind: 'action', act: 'aiSettings', group: 'ai' },
+];
+const QUICK_GROUPS = [
+  { g: 'general', label: '常用' },
+  { g: 'doc', label: '文档操作' },
+  { g: 'export', label: '导出与复制' },
+  { g: 'look', label: '外观' },
+  { g: 'fmt', label: '文本格式' },
+  { g: 'ai', label: 'AI 动作' },
+];
+const QUICK_DEFAULT = ['searchReplace', 'rename', 'bg', 'fmtImage', 'addtolib', 'md', 'txt', 'share-r2', 'theme', 'aiSummary', 'aiGenerate', 'aiBookOutline'];
+
+function loadQuickConfig() {
+  try {
+    const raw = localStorage.getItem(QUICK_KEY);
+    if (!raw) return QUICK_DEFAULT.slice();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return QUICK_DEFAULT.slice();
+    const valid = QUICK_CATALOG.map((t) => t.id);
+    return arr.filter((id) => valid.includes(id));
+  } catch (_) { return QUICK_DEFAULT.slice(); }
+}
+function saveQuickConfig(ids) {
+  try { localStorage.setItem(QUICK_KEY, JSON.stringify(ids)); } catch (_) {}
+}
+function buildQuickMenu() {
+  const box = document.getElementById('quickButtons');
+  if (!box) return;
+  const ids = loadQuickConfig();
+  if (!ids.length) {
+    box.innerHTML = '<div class="quick-empty">尚未选择常用功能，点下方「⚙ 自定义常用菜单」添加。</div>';
+    return;
+  }
+  let html = '';
+  ids.forEach((id) => {
+    const t = QUICK_CATALOG.find((x) => x.id === id);
+    if (!t) return;
+    const attr = t.kind === 'action' ? ('data-action="' + t.act + '"') : ('data-act="' + t.act + '"');
+    html += '<button type="button" role="menuitem" ' + attr + '>' + t.label + '</button>';
+  });
+  box.innerHTML = html;
+}
+function openQuickMenu(open) {
+  const m = document.getElementById('quickMenu');
+  const b = document.getElementById('brandEl');
+  if (!m) return;
+  if (open) { buildQuickMenu(); m.removeAttribute('hidden'); if (b) b.setAttribute('aria-expanded', 'true'); }
+  else { m.setAttribute('hidden', ''); if (b) b.setAttribute('aria-expanded', 'false'); }
+}
+function closeQuickMenu() { openQuickMenu(false); }
+
+// 自定义弹窗
+function openQuickCustomize() {
+  const modal = document.getElementById('quickCustomizeModal');
+  if (!modal) return;
+  const box = document.getElementById('quickCustList');
+  if (box) {
+    const checked = new Set(loadQuickConfig());
+    let html = '';
+    QUICK_GROUPS.forEach((grp) => {
+      const items = QUICK_CATALOG.filter((t) => t.group === grp.g);
+      if (!items.length) return;
+      html += '<div class="fb-cust-group"><div class="fb-cust-glabel">' + grp.label + '</div>';
+      items.forEach((t) => {
+        const on = checked.has(t.id) ? ' checked' : '';
+        html += '<label class="fb-opt"><input type="checkbox" data-qk="' + t.id + '"' + on + '>'
+              + '<span class="fb-opt-text"><b>' + t.label + '</b></span></label>';
+      });
+      html += '</div>';
+    });
+    box.innerHTML = html;
+  }
+  modal.hidden = false;
+}
+function closeQuickCustomize() {
+  const modal = document.getElementById('quickCustomizeModal');
+  if (modal) modal.hidden = true;
+}
+function saveQuickCustomize() {
+  const modal = document.getElementById('quickCustomizeModal');
+  if (!modal) return;
+  const ids = [];
+  QUICK_CATALOG.forEach((t) => {
+    const c = modal.querySelector('input[data-qk="' + t.id + '"]');
+    if (c && c.checked) ids.push(t.id);
+  });
+  saveQuickConfig(ids);
+  buildQuickMenu();                                    // 立即重建，使改动无需重开/刷新即生效
+  closeQuickCustomize();
+  if (typeof flash === 'function') flash('常用菜单已更新');
+}
+function resetQuickCustomize() {
+  saveQuickConfig(QUICK_DEFAULT.slice());
+  buildQuickMenu();                                    // 同步重建菜单
+  openQuickCustomize();                                // 刷新勾选状态
+}
+// logo 点击 / 键盘打开；菜单内点击分发；外部点击与 Esc 关闭
+(function bindQuickMenu() {
+  const brandEl = document.getElementById('brandEl');
+  const quickMenuEl = document.getElementById('quickMenu');
+  if (brandEl) {
+    brandEl.addEventListener('click', (e) => {
+      if (e.target.closest('#quickMenu')) return;     // 点菜单内部不切换
+      openQuickMenu(quickMenuEl && quickMenuEl.hasAttribute('hidden'));
+    });
+    brandEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openQuickMenu(quickMenuEl && quickMenuEl.hasAttribute('hidden'));
+      }
+    });
+  }
+  if (quickMenuEl) {
+    quickMenuEl.addEventListener('click', (e) => {
+      const gear = e.target.closest('#quickCustomizeBtn');
+      if (gear) { closeQuickMenu(); openQuickCustomize(); return; }
+      const more = e.target.closest('#quickMoreBtn');
+      if (more) { closeQuickMenu(); openMoreMenu(true); return; }
+      const btn = e.target.closest('[data-act], [data-action]');
+      if (!btn) return;
+      const macro = btn.dataset.action;
+      if (macro) {
+        const fn = TEXT_ACTIONS[macro] || AI_ACTIONS[macro] || (FORMAT_ACTIONS && FORMAT_ACTIONS[macro]);
+        if (fn) fn();
+        closeQuickMenu();
+        return;
+      }
+      const act = btn.dataset.act;
+      if (act) { handleDataAct(act, btn); closeQuickMenu(); }
+    });
+  }
+  // 自定义弹窗：背景点击 / Esc 关闭 + 按钮
+  const qcm = document.getElementById('quickCustomizeModal');
+  if (qcm) {
+    qcm.addEventListener('click', (e) => { if (e.target === qcm) closeQuickCustomize(); });
+    qcm.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeQuickCustomize(); });
+    const r = document.getElementById('quickCustReset'); if (r) r.addEventListener('click', resetQuickCustomize);
+    const c = document.getElementById('quickCustClose'); if (c) c.addEventListener('click', closeQuickCustomize);
+    const s = document.getElementById('quickCustSave'); if (s) s.addEventListener('click', saveQuickCustomize);
+  }
+})();
+
 
 
 // === SECTION: NAS 同步：上传 / 下载 ===
@@ -3321,6 +3510,10 @@ document.addEventListener('click', (e) => {
   if (menuWrap.contains(e.target) || btnMore.contains(e.target)) return;
   if (!moreMenu.hasAttribute('hidden')) openMoreMenu(false);
   else closeAllSubmenus();
+  // 关闭左上角 logo 快捷菜单（点 logo 自身由 logo 的点击处理器切换，不在此处理）
+  const qm = document.getElementById('quickMenu');
+  const be = document.getElementById('brandEl');
+  if (qm && be && !qm.hasAttribute('hidden') && !be.contains(e.target)) closeQuickMenu();
 });
 menuWrap.addEventListener('click', (e) => {
   // 二级菜单触发器：只展开/收起，不关闭主菜单
@@ -3338,6 +3531,11 @@ menuWrap.addEventListener('click', (e) => {
   const act = btn.dataset.act;
   if (!act) return;
   openMoreMenu(false);
+  handleDataAct(act, btn);
+});
+
+// 右上角「⋯」菜单与左上角 logo 快捷菜单共用的 data-act 分发
+function handleDataAct(act, btn) {
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
   else if (act === 'publish-blog') publishToBlog();
@@ -3361,7 +3559,7 @@ menuWrap.addEventListener('click', (e) => {
   else if (act === 'layout-reset') resetLayout();
   else if (act === 'bg') openBgDialog();
   else if (act === 'fb-customize') openFbCustomize();
-});
+}
 
 // === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===
 // 博客后端地址：如需自托管，仅改这一行即可（与 R2_WORKER_URL 同属「唯一后端耦合点」约定）。

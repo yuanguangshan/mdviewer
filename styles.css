@@ -52,10 +52,18 @@ body {
   border-bottom: 1px solid var(--border);
   gap: 12px; position: relative; z-index: 10;
 }
-.brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; white-space: nowrap; display: flex; align-items: center; gap: 8px; position: relative; cursor: pointer; border-radius: 8px; padding: 2px 4px; margin: -2px -4px; }
+.brand:hover { color: var(--accent-soft); }
+.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .brand-logo { width: 26px; height: 26px; flex: 0 0 auto; display: block; }
 .brand-logo .brand-dot { fill: var(--text); }
 .brand span { color: var(--accent-soft); }
+.brand-caret { font-size: 10px; opacity: .55; margin-left: 1px; line-height: 1; }
+/* 左上角 logo 快捷菜单：锚定在 logo 下方（左对齐），其余沿用 .menu 样式 */
+#quickMenu { left: 0; right: auto; min-width: 232px; }
+.quick-foot { color: var(--accent-soft) !important; font-weight: 600; }
+.quick-foot:hover { background: var(--bg-soft); color: var(--accent-soft); }
+.quick-empty { padding: 12px 14px; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .toolbar-left { display: flex; align-items: center; gap: 8px; }
 /* 全屏模式：隐藏工具栏/状态栏，工作区填满；右上角浮动按钮（进入 / 退出） */
