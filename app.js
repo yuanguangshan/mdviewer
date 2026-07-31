@@ -494,8 +494,13 @@ function hashStr(s) {
   return String(h >>> 0);
 }
 // 渲染流程图（仅在文档含 mermaid 代码块且库尚未加载时，才去懒加载 mermaid）
+// mermaid 主题由 app 主题(data-theme)决定:主题切换后旧主题 SVG 缓存必须作废,
+// 否则复用缓存会导致图表不跟随新主题(在函数内检查,避免 const 定义位置的 TDZ)
+let lastMermaidTheme = null;
 async function renderMermaidDiagrams() {
   if (!preview.querySelector('pre code.language-mermaid')) return;
+  const themeKey = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  if (themeKey !== lastMermaidTheme) { mermaidCache.clear(); lastMermaidTheme = themeKey; }
   const ok = await ensureMermaid();
   if (!ok) return;
   try {
@@ -556,24 +561,16 @@ async function ensureKatex() {
   }
   return katexLoading;
 }
-// KaTeX 渲染缓存：preview 每次重建后公式文本会回到原始定界符形态，
-// 用「公式内容指纹」判断数学块是否变化——未变化直接跳过 renderMathInElement，
-// 避免输入停顿期间对整篇公式反复全量重跑。
-let lastMathFingerprint = '';
-function mathFingerprint() {
-  const t = preview.textContent || '';
-  const m = t.match(/\$\$[\s\S]+?\$\$|(^|[^\\$])\$[^$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g);
-  return m ? m.join('\u0000') : '';
-}
-// 仅当文档确有公式定界符（$$…$$ / $…$ / \(…\) / \[…\]）时才懒加载 KaTeX
+// 仅当文档确有公式定界符（$$…$$ / $…$ / \(…\) / \[…\]）时才懒加载 KaTeX。
+// 注意：preview.innerHTML 每次都会全量重建，已渲染的 <span class="katex"> 会被重置回
+// 定界符源码，因此这里必须每次重建后都调用 renderMathInElement——不能像 mermaid 那样
+// 用指纹短路跳过（否则公式会一直停留在未渲染的源码形态，见 v3.7 review 缺陷修复）。
 async function renderMathFormulas() {
   const text = preview.textContent || '';
   const hasMath = /\$\$[\s\S]+?\$\$/.test(text)
     || /(^|[^\\$])\$[^$\n]+\$/.test(text)
     || /\\\(|\\\[/.test(text);
-  if (!hasMath) { lastMathFingerprint = ''; return; }
-  const fp = mathFingerprint();          // 必须在渲染前取（渲染后 $ 定界符已被 KaTeX 消费）
-  if (fp === lastMathFingerprint) return; // 公式内容未变，无需重跑
+  if (!hasMath) return;
   const ok = await ensureKatex();
   if (!ok || !window.renderMathInElement) return;
   try {
@@ -587,7 +584,6 @@ async function renderMathFormulas() {
       throwOnError: false,
       ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
     });
-    lastMathFingerprint = fp;            // 渲染成功才更新指纹
   } catch (e) {
     console.warn('KaTeX 渲染失败:', e);
   }
@@ -1195,8 +1191,8 @@ function flushSave() {
     }).catch(() => {});
   }
 }
+// 仅注册 pagehide：移动端/桌面端覆盖更全，且避免与 beforeunload 重复执行同一保存
 window.addEventListener('pagehide', flushSave);
-window.addEventListener('beforeunload', flushSave);
 
 let flashTimer = null;
 function flash(msg) {
@@ -2341,13 +2337,18 @@ function askInput(title, opts) {
     input.focus();
     input.select();
     let settled = false;
-    const norm = (v) => opts.allowEmpty ? v : (v || null);
+    const norm = () => {
+      const raw = input.value;
+      if (input.type === 'password') return raw || null;   // 密码输入保留首尾空格（NAS 凭据可能含空格）
+      const t = raw.trim();
+      return opts.allowEmpty ? t : (t || null);
+    };
     const finish = (val) => { if (settled) return; settled = true; m.hidden = true; resolve(val); };
-    document.getElementById('promptModalOk').onclick = () => finish(norm(input.value.trim()));
+    document.getElementById('promptModalOk').onclick = () => finish(norm());
     document.getElementById('promptModalCancel').onclick = () => finish(null);
     m.onclick = (e) => { if (e.target === m) finish(null); };            // 点遮罩关闭
     input.onkeydown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(norm(input.value.trim())); }
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(norm()); }
       else if (e.key === 'Escape') { e.stopPropagation(); finish(null); }
     };
   });
