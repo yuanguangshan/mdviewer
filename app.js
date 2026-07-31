@@ -1901,6 +1901,35 @@ const AI_CFG_KEY = 'md-ai-config';
 function readAiConfig() {
   try { return JSON.parse(localStorage.getItem(AI_CFG_KEY) || '{}'); } catch (_) { return {}; }
 }
+// 使用过的模型历史：记录 { model, endpoint }（最近优先，最多 20 条），供设置弹窗点选
+const AI_MODEL_HISTORY_KEY = 'md-ai-model-history';
+const AI_MODEL_HISTORY_MAX = 20;
+function readModelHistory() {
+  try { const a = JSON.parse(localStorage.getItem(AI_MODEL_HISTORY_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; }
+}
+function writeModelHistory(list) {
+  try { localStorage.setItem(AI_MODEL_HISTORY_KEY, JSON.stringify(list.slice(0, AI_MODEL_HISTORY_MAX))); } catch (_) {}
+}
+// 保存/使用模型时记一条历史：按 model+endpoint 去重并提到最前
+function recordModelUsage(model, endpoint) {
+  if (!model) return;
+  const key = model + '\u0000' + (endpoint || '');
+  const list = readModelHistory().filter((h) => (h.model + '\u0000' + (h.endpoint || '')) !== key);
+  list.unshift({ model, endpoint: endpoint || '' });
+  writeModelHistory(list);
+}
+// 把历史渲染进设置弹窗的 datalist（option.label 显示对应 endpoint 供参考）
+function renderModelHistory() {
+  const dl = document.getElementById('aiModelHistory');
+  if (!dl) return;
+  dl.innerHTML = '';
+  for (const h of readModelHistory()) {
+    const opt = document.createElement('option');
+    opt.value = h.model;
+    if (h.endpoint) opt.label = h.endpoint;
+    dl.appendChild(opt);
+  }
+}
 // 把当前使用的 AI 模型名同步到两处 UI 徽标：
 //  - 智能助理菜单项右侧（#aiMenuModel）
 //  - AI 生成浮层标题旁（#aspModel）
@@ -2594,6 +2623,7 @@ function openAiSettings() {
   if (ep) ep.value = cfg.endpoint || 'https://wx.want.biz/v1/chat/completions';
   if (md) md.value = cfg.model || 'free';
   if (key) key.value = cfg.apiKey || '';
+  renderModelHistory(); // 填充「最近使用」候选
   const m = $('#aiSettingsModal');
   if (m) m.hidden = false;
 }
@@ -2603,6 +2633,7 @@ function saveAiSettings() {
   const key = $('#aiKey').value.trim();
   if (!key) { toast('请填写 API Key', 'err'); return; }
   try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ endpoint: ep, model: md, apiKey: key })); } catch (_) {}
+  recordModelUsage(md, ep); // 记录本次使用的模型到历史
   updateAiModelBadge(); // 模型变更后刷新菜单/浮层徽标
   const m = $('#aiSettingsModal');
   if (m) m.hidden = true;
@@ -2662,6 +2693,14 @@ if (aiModal) {
   $('#aiReset').addEventListener('click', resetAiSettings);
   $('#aiTest').addEventListener('click', testAiConnection);
   $('#aiSettingsCancel').addEventListener('click', () => { aiModal.hidden = true; });
+  // 从历史选择模型时，若 endpoint 为空则顺带补上该模型上次使用的 endpoint
+  $('#aiModel').addEventListener('input', () => {
+    const v = $('#aiModel').value.trim();
+    if (!v) return;
+    const hit = readModelHistory().filter((h) => h.model === v && h.endpoint);
+    const epEl = $('#aiEndpoint');
+    if (hit.length === 1 && epEl && !epEl.value.trim()) epEl.value = hit[0].endpoint;
+  });
   // 点击遮罩空白处关闭
   aiModal.addEventListener('click', (e) => { if (e.target === aiModal) aiModal.hidden = true; });
   // 回车保存 / Esc 关闭
