@@ -483,6 +483,16 @@ async function ensureMermaid() {
   }
   return !!window.mermaid;
 }
+// mermaid 渲染缓存：图表源码 hash -> 已渲染 SVG HTML。
+// preview.innerHTML 每次全量重建，mermaid 生成的 SVG 会随 DOM 重置丢失，
+// 命中缓存时直接复用 SVG，避免输入停顿期间反复全量重跑 mermaid.run。
+const mermaidCache = new Map();
+const MERMAID_CACHE_MAX = 20;
+function hashStr(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return String(h >>> 0);
+}
 // 渲染流程图（仅在文档含 mermaid 代码块且库尚未加载时，才去懒加载 mermaid）
 async function renderMermaidDiagrams() {
   if (!preview.querySelector('pre code.language-mermaid')) return;
@@ -490,15 +500,36 @@ async function renderMermaidDiagrams() {
   if (!ok) return;
   try {
     const mermaidEls = preview.querySelectorAll('pre code.language-mermaid');
+    const toRender = [];   // 仅未命中缓存、需要 mermaid.run 的节点
     mermaidEls.forEach((el, idx) => {
       const parent = el.parentElement;
+      const key = hashStr(el.textContent);
+      const cached = mermaidCache.get(key);
       const wrapper = document.createElement('div');
-      wrapper.className = 'mermaid-wrapper';
-      wrapper.id = 'mermaid-' + Date.now() + '-' + idx;
-      wrapper.textContent = el.textContent;
+      wrapper.dataset.key = key;   // 渲染完成后凭此写回缓存（此时 textContent 已变 SVG，不能再算 hash）
+      if (cached) {
+        wrapper.className = 'mermaid-wrapper mermaid-rendered';
+        wrapper.innerHTML = cached;
+      } else {
+        wrapper.className = 'mermaid-wrapper';
+        wrapper.id = 'mermaid-' + Date.now() + '-' + idx;
+        wrapper.textContent = el.textContent;
+        toRender.push(wrapper);
+      }
       parent.replaceWith(wrapper);
     });
-    window.mermaid.run({ nodes: preview.querySelectorAll('.mermaid-wrapper') });
+    if (toRender.length) {
+      await window.mermaid.run({ nodes: toRender });
+      for (const w of toRender) {
+        if (w.dataset.key && w.querySelector('svg')) {
+          mermaidCache.set(w.dataset.key, w.innerHTML);
+          if (mermaidCache.size > MERMAID_CACHE_MAX) {
+            const firstKey = mermaidCache.keys().next().value;   // 近似 LRU：淘汰最早插入
+            mermaidCache.delete(firstKey);
+          }
+        }
+      }
+    }
   } catch (e) {
     console.warn('Mermaid 渲染失败:', e);
   }
@@ -525,13 +556,24 @@ async function ensureKatex() {
   }
   return katexLoading;
 }
+// KaTeX 渲染缓存：preview 每次重建后公式文本会回到原始定界符形态，
+// 用「公式内容指纹」判断数学块是否变化——未变化直接跳过 renderMathInElement，
+// 避免输入停顿期间对整篇公式反复全量重跑。
+let lastMathFingerprint = '';
+function mathFingerprint() {
+  const t = preview.textContent || '';
+  const m = t.match(/\$\$[\s\S]+?\$\$|(^|[^\\$])\$[^$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g);
+  return m ? m.join('\u0000') : '';
+}
 // 仅当文档确有公式定界符（$$…$$ / $…$ / \(…\) / \[…\]）时才懒加载 KaTeX
 async function renderMathFormulas() {
   const text = preview.textContent || '';
   const hasMath = /\$\$[\s\S]+?\$\$/.test(text)
     || /(^|[^\\$])\$[^$\n]+\$/.test(text)
     || /\\\(|\\\[/.test(text);
-  if (!hasMath) return;
+  if (!hasMath) { lastMathFingerprint = ''; return; }
+  const fp = mathFingerprint();          // 必须在渲染前取（渲染后 $ 定界符已被 KaTeX 消费）
+  if (fp === lastMathFingerprint) return; // 公式内容未变，无需重跑
   const ok = await ensureKatex();
   if (!ok || !window.renderMathInElement) return;
   try {
@@ -545,6 +587,7 @@ async function renderMathFormulas() {
       throwOnError: false,
       ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
     });
+    lastMathFingerprint = fp;            // 渲染成功才更新指纹
   } catch (e) {
     console.warn('KaTeX 渲染失败:', e);
   }
@@ -562,6 +605,9 @@ if (window.marked && marked.Lexer && marked.Lexer.rules && marked.Lexer.rules.in
 }
 function renderMarkdown() {
   const src = editor.value || '';
+  // 大文档保护：超 1MB 或 5000 行时跳过开销大的后处理（代码高亮 / mermaid），
+  // 保证输入停顿不把主线程卡死；预览正文仍正常渲染。
+  const heavyDoc = src.length > 1000000 || src.split('\n').length > 5000;
   let html;
   // --- 空状态：展示欢迎卡片，而非斜体占位符 ---
   if (!src.trim()) {
@@ -580,13 +626,14 @@ function renderMarkdown() {
   }
   preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html, { ADD_TAGS: ['audio', 'source'], ADD_ATTR: ['controls', 'preload', 'autoplay', 'loop'] }) : html;
   // 后处理高亮：对任何 marked 版本都稳，且不依赖已废弃的 setOptions({highlight})
-  if (window.hljs) {
+  if (window.hljs && !heavyDoc) {
     preview.querySelectorAll('pre code').forEach((el) => {
       try { hljs.highlightElement(el); } catch (_) {}
     });
   }
   // --- Mermaid 图表渲染（按需懒加载 mermaid 库，见 renderMermaidDiagrams）---
-  renderMermaidDiagrams();
+  // 大文档跳过：mermaid 每次全量重跑成本高（另有渲染缓存）
+  if (!heavyDoc) renderMermaidDiagrams();
   // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
   renderMathFormulas();
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
@@ -850,6 +897,7 @@ function resolveImages() {
       }
       const url = URL.createObjectURL(entry.blob);
       newUrls.add(url);
+      img.loading = 'lazy';   // 文库图延迟加载：多图/大文档不阻塞首屏（与裸链接图一致）
       img.src = url;
       img.classList.remove('broken');
     })());
@@ -968,6 +1016,18 @@ function updatePos() {
   const line = before.split('\n').length;
   const col = pos - before.lastIndexOf('\n');   // 无换行时 lastIndexOf=-1 → col=pos+1（第 1 列起算）
   $('#posInfo').textContent = '行 ' + line + '，列 ' + col;
+}
+// 统计 / 行号 / 光标位置：input 每键触发，合并到 rAF 下一帧只跑一次，
+// 大文档不再逐键同步全量扫描（正则统计 + 行号串重建）
+let _statsRaf = 0;
+function scheduleStats() {
+  if (_statsRaf) return;
+  _statsRaf = requestAnimationFrame(() => {
+    _statsRaf = 0;
+    updateStats();
+    updateGutter();
+    updatePos();
+  });
 }
 
 // === SECTION: 视图：双栏 / 编辑 / 预览 ===
@@ -1096,13 +1156,21 @@ function setSaveState(cls, text) {
   curSaveClass = cls || '';
   curSaveText = text;
   const el = $('#saveState');
+  if (!el) return;
   el.className = curSaveClass;
   el.textContent = text;
 }
 const saveDraft = debounce(() => {
   setSaveState('saving', '保存中…');
+  const content = editor.value;
+  // 容量保护：正文超 4MB（localStorage 5MB 配额的安全阈值）不再写草稿，
+  // 避免每次输入停顿都抛配额异常；提示改用导出 / 文库保存
+  if (content.length > 4000000) {
+    setSaveState('warn', '⚠ 内容过大，草稿未保存（请用导出/文库）');
+    return;
+  }
   try {
-    localStorage.setItem('md-draft', editor.value);
+    localStorage.setItem('md-draft', content);
     localStorage.setItem('md-name', currentName);
     setSaveState('saved', '✓ 已保存');
   } catch (e) {
@@ -1110,9 +1178,30 @@ const saveDraft = debounce(() => {
   }
 }, 800);
 
+// 兜底保存：页面隐藏/卸载前立即同步写草稿 + 文库最新内容，
+// 补上防抖窗口内最后 <800ms 的输入（浏览器会等待未完成的 IndexedDB 事务）
+function flushSave() {
+  try {
+    if (editor.value.length <= 4000000) {
+      localStorage.setItem('md-draft', editor.value);
+      localStorage.setItem('md-name', currentName);
+    }
+  } catch (_) {}
+  if (currentLibId && libDb) {
+    idbGet(currentLibId).then((oldDoc) => {
+      const history = (oldDoc && oldDoc.history) || [];
+      // 只写最新内容与历史（不 push 新快照），避免卸载前异步链过长中断
+      return idbPut({ id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
+    }).catch(() => {});
+  }
+}
+window.addEventListener('pagehide', flushSave);
+window.addEventListener('beforeunload', flushSave);
+
 let flashTimer = null;
 function flash(msg) {
   const el = $('#saveState');
+  if (!el) return;
   el.className = 'flash';
   el.textContent = msg;
   clearTimeout(flashTimer);
@@ -1140,6 +1229,7 @@ function toast(msg, type, ms) {
 // === SECTION: 文件名 / 草稿载入 / 内容变更统一刷新 ===
 function updateFileName() {
   const el = $('#fileName');
+  if (!el) return;
   el.textContent = currentName;
   el.title = currentName;
 }
@@ -1161,14 +1251,12 @@ function afterChange(opts) {
   currentSearchHit = null;       // 内容变化后旧的查找高亮位置失效
   scheduleRender();
   scheduleHighlight();
-  updateStats();
-  updateGutter();
-  updatePos();
+  scheduleStats();
   saveDraft();
   if (!(opts && opts.skipWriteback)) writebackLibDebounced();   // 文库文档：编辑后去抖自动回写（打开/恢复时跳过，避免刷新时间戳）
 }
 editor.addEventListener('input', afterChange);
-['keyup', 'click', 'select'].forEach((ev) => editor.addEventListener(ev, updatePos));
+['keyup', 'click', 'select'].forEach((ev) => editor.addEventListener(ev, scheduleStats));
 
 // === SECTION: 打开文件 ===
 $('#btnOpen').addEventListener('click', openFile);
@@ -1330,7 +1418,7 @@ function ensureNameFromContent() {
 
 // === SECTION: 新建 / 重命名 ===
 $('#btnNew').addEventListener('click', async () => {
-  if (editor.value.trim() && !confirm('新建文档？未保存的内容将丢失。')) return;
+  if (editor.value.trim() && !(await askConfirm('新建文档', '未保存的内容将丢失。'))) return;
   currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
   localStorage.removeItem('md-lib-current');
   try {
@@ -1353,8 +1441,8 @@ $('#btnNew').addEventListener('click', async () => {
   updateFileName();
   afterChange();
 });
-function renameFile() {
-  const n = prompt('文件名：', currentName);
+async function renameFile() {
+  const n = await askInput('文件名：', { def: currentName });
   if (n && n.trim()) {
     currentName = n.trim();
     currentNameIsAuto = false;
@@ -1855,11 +1943,11 @@ const FORMAT_ACTIONS = {
   fmtItalic: () => wrapSelection('*', '*', '斜体'),
   fmtCode:   () => wrapSelection('`', '`', '代码'),
   fmtLink:   () => wrapSelection('[', '](https://)', '链接文字'),
-  fmtImage:  () => {
+  fmtImage:  async () => {
     const s = editor.selectionStart, e = editor.selectionEnd;
     const sel = editor.value.slice(s, e);
     const alt = sel || '图片描述';
-    const url = prompt('请输入图片链接（留空则选取本地图片文件）：', '');
+    const url = await askInput('请输入图片链接（留空则选取本地图片文件）：', { allowEmpty: true });
     if (url === null) { editor.focus(); return; }
     const trimmed = url.trim();
     if (trimmed) {
@@ -1959,19 +2047,42 @@ function aiErrorHint(err, endpoint) {
 // 流式调用 AI：读取 ReadableStream 增量解析 SSE（data: 行抽 delta.content），
 // 每收到一段回调 onToken(deltaText, fullText)；非流式 JSON 兜底；支持 AbortSignal 中途停止。
 // opts: { signal, quiet } —— quiet=true 时不弹"正在思考" toast（由浮层展示进度）。
+// 缺 Key 时打开应用内 AI 设置浮层让用户填写（复用 #aiSettingsModal，
+// 替代 window.prompt/confirm 系统弹窗）。轮询等待浮层关闭：
+// 用户点「保存」→ 全局 saveAiSettings 存配置并关闭 → 返回是否已配好 Key。
+function askAiKeyViaModal() {
+  return new Promise((resolve) => {
+    const m = $('#aiSettingsModal');
+    if (!m) return resolve(false);
+    const cfg = readAiConfig();
+    const ep = $('#aiEndpoint'), md = $('#aiModel'), key = $('#aiKey');
+    if (ep) ep.value = cfg.endpoint || 'https://wx.want.biz/v1/chat/completions';
+    if (md) md.value = cfg.model || 'free';
+    if (key) key.value = '';   // 强制重新输入 Key（已有 Key 不会走到这里）
+    renderModelHistory();
+    m.hidden = false;
+    if (key) key.focus();
+    const timer = setInterval(() => {
+      if (m.hidden) {
+        clearInterval(timer);
+        resolve(!!(readAiConfig().apiKey || '').trim());   // 保存了 Key 才算配好
+      }
+    }, 200);
+  });
+}
 async function streamAiApi(promptText, systemPrompt, onToken, opts) {
   opts = opts || {};
   let cfg = readAiConfig();
   let apiKey = cfg.apiKey;
+  if (!apiKey) {
+    // 缺 Key：应用内浮层填写（替代 window.prompt/confirm 系统弹窗）
+    await askAiKeyViaModal();
+    cfg = readAiConfig();      // 用户可能在浮层里改了 endpoint/model/Key
+    apiKey = cfg.apiKey;
+    if (!apiKey) { toast('未配置 AI Key', 'err'); return null; }
+  }
   const endpoint = cfg.endpoint || 'https://wx.want.biz/v1/chat/completions';
   const model = cfg.model || 'free';
-  if (!apiKey) {
-    apiKey = window.prompt('请输入 AI API Key（OpenAI / DeepSeek / 中转商，仅存本机）：', '');
-    if (!apiKey) { toast('未配置 AI Key', 'err'); return null; }
-    if (window.confirm('是否将此配置保留在本机 localStorage 以便下次使用？')) {
-      try { localStorage.setItem(AI_CFG_KEY, JSON.stringify({ apiKey, endpoint, model })); } catch (_) {}
-    }
-  }
   if (!opts.quiet) toast('AI 正在思考…', 'info', 60000);
   let full = '';
   try {
@@ -2036,11 +2147,6 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
     return null;
   }
 }
-// 非流式便捷封装（一次性返回全文）
-async function callAiApi(promptText, systemPrompt) {
-  return streamAiApi(promptText, systemPrompt, null, { quiet: false });
-}
-
 // === SECTION: AI 流式打字机浮层 ===
 let aiStreamAbort = null;   // 当前流式请求的 AbortController
 let aiStreamApply = null;   // 完成后的"应用"回调
@@ -2157,7 +2263,7 @@ function aiProcessSelection(systemPrompt, label) {
 }
 // AI 多平台爆款转写：将选中/输入的素材改写为指定平台风格的爆款文案，流式展示后一键插入。
 // mode: 'zhihu' = 知乎体；'twitter' = Twitter Thread 风。
-function aiSocialRewrite(mode) {
+async function aiSocialRewrite(mode) {
   const isZhihu = mode === 'zhihu';
   const label = isZhihu ? '知乎体' : 'Twitter Thread';
   const s = editor.selectionStart, e = editor.selectionEnd;
@@ -2165,7 +2271,7 @@ function aiSocialRewrite(mode) {
 
   // 未选中文字时，提示输入素材（与 aiGenerate / aiMindmap / aiBookOutline 同风格）
   if (!selected) {
-    selected = window.prompt(`请输入要转写为${label}的素材或原文：`, '');
+    selected = await askAiPrompt(`请输入要转写为${label}的素材或原文：`);
     if (!selected) { toast('已取消', 'info'); return; }
   }
 
@@ -2213,6 +2319,57 @@ function askAiPrompt(desc) {
     input.onkeydown = (e) => {                                                  // Enter 提交；Shift+Enter 换行；Esc 关闭
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); finish(input.value.trim() || null); }
       else if (e.key === 'Escape') { e.stopPropagation(); finish(null); }
+    };
+  });
+}
+
+// 通用输入浮层：替代 window.prompt。返回 Promise<string|null>（取消/遮罩/Esc = null）。
+// opts: { desc, def, password, multiline }
+function askInput(title, opts) {
+  opts = opts || {};
+  return new Promise((resolve) => {
+    const m = document.getElementById('promptModal');
+    const input = document.getElementById('promptModalInput');
+    if (!m || !input) return resolve(window.prompt(opts.def !== undefined ? title + '\n（默认：' + opts.def + '）' : title, opts.def || '') || null);   // 无容器兜底
+    const titleEl = document.getElementById('promptModalTitle');
+    const descEl = document.getElementById('promptModalDesc');
+    if (titleEl) titleEl.textContent = title;
+    if (descEl) { if (opts.desc) { descEl.textContent = opts.desc; descEl.hidden = false; } else descEl.hidden = true; }
+    input.type = opts.password ? 'password' : 'text';
+    input.value = opts.def || '';
+    m.hidden = false;
+    input.focus();
+    input.select();
+    let settled = false;
+    const norm = (v) => opts.allowEmpty ? v : (v || null);
+    const finish = (val) => { if (settled) return; settled = true; m.hidden = true; resolve(val); };
+    document.getElementById('promptModalOk').onclick = () => finish(norm(input.value.trim()));
+    document.getElementById('promptModalCancel').onclick = () => finish(null);
+    m.onclick = (e) => { if (e.target === m) finish(null); };            // 点遮罩关闭
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(norm(input.value.trim())); }
+      else if (e.key === 'Escape') { e.stopPropagation(); finish(null); }
+    };
+  });
+}
+// 通用确认浮层：替代 window.confirm。返回 Promise<boolean>
+function askConfirm(title, msg) {
+  return new Promise((resolve) => {
+    const m = document.getElementById('confirmModal');
+    if (!m) return resolve(true);                                        // 无容器兜底：默认继续
+    const titleEl = document.getElementById('confirmModalTitle');
+    const msgEl = document.getElementById('confirmModalMsg');
+    if (titleEl) titleEl.textContent = title;
+    if (msgEl) msgEl.textContent = msg || '';
+    m.hidden = false;
+    let settled = false;
+    const finish = (ok) => { if (settled) return; settled = true; m.hidden = true; resolve(ok); };
+    document.getElementById('confirmModalOk').onclick = () => finish(true);
+    document.getElementById('confirmModalCancel').onclick = () => finish(false);
+    m.onclick = (e) => { if (e.target === m) finish(false); };           // 点遮罩=取消
+    m.onkeydown = (e) => {   // 覆盖赋值而非 addEventListener,避免多次调用堆积监听
+      if (e.key === 'Escape') { e.stopPropagation(); finish(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); finish(true); }
     };
   });
 }
@@ -2366,13 +2523,13 @@ const AI_ACTIONS = {
     });
   },
   // 策划书籍大纲：基于选中文字（主题/素材）生成结构化大纲，流式展示后一键插入
-  aiBookOutline() {
+  async aiBookOutline() {
     const s = editor.selectionStart, e = editor.selectionEnd;
     let selected = editor.value.slice(s, e).trim();
 
     // 未选中文字时，提示输入主题（与 aiGenerate / aiMindmap 同风格，避免从更多菜单点按直接报错）
     if (!selected) {
-      selected = window.prompt('请输入要策划书籍大纲的主题或素材：', '');
+      selected = await askAiPrompt('请输入要策划书籍大纲的主题或素材：');
       if (!selected) { toast('已取消', 'info'); return; }
     }
 
@@ -2398,7 +2555,7 @@ const AI_ACTIONS = {
     });
   },
   // 逐章写作：自动检测「下一个未写的章」，参照大纲 + 上一章结尾续写，追加到文档末尾
-  aiWriteNextChapter() {
+  async aiWriteNextChapter() {
     const doc = editor.value;
     if (!doc.trim()) { toast('文档为空，请先用「📖 策划书籍大纲」生成大纲', 'err'); return; }
 
@@ -2431,7 +2588,7 @@ const AI_ACTIONS = {
       const hint = chapters.length
         ? '大纲中的章节均已写完。如需重写/加写，请输入章节（如：第4章 XXX）：'
         : '未能从文档中识别出「第X章」大纲。请输入要写的章节（如：第1章 XXX）：';
-      const input = window.prompt(hint, '');
+      const input = await askAiPrompt(hint);
       if (!input || !input.trim()) { toast('已取消', 'info'); return; }
       const parsed = parseChapterList(input.trim());
       // 兜底章号 = 已写最大章号 + 1（不能用 done.size：锚点 0 也在集合里，会数偏）
@@ -2567,13 +2724,13 @@ const AI_ACTIONS = {
     });
   },
   // 新增：AI 一键生成思维导图 (Mermaid)
-  aiMindmap() {
+  async aiMindmap() {
     const s = editor.selectionStart, e = editor.selectionEnd;
     let selected = editor.value.slice(s, e).trim();
 
     // 未选中文字时，提示输入主题（与 aiGenerate 同风格）
     if (!selected) {
-      selected = window.prompt('请输入要生成思维导图的主题或杂乱笔记：', '');
+      selected = await askAiPrompt('请输入要生成思维导图的主题或杂乱笔记：');
       if (!selected) { toast('已取消', 'info'); return; }
     }
 
@@ -2753,6 +2910,7 @@ if (shareModal) {
   $('#shareCloseBtn').addEventListener('click', () => { shareModal.hidden = true; });
   shareModal.addEventListener('click', (e) => { if (e.target === shareModal) shareModal.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !shareModal.hidden) shareModal.hidden = true; });
+}
 
 // 发布到博客结果弹窗：复制 / 打开 / 关闭（背景点击 + ESC 亦关闭）
 const blogPublishModal = $('#blogPublishModal');
@@ -2768,7 +2926,6 @@ if (blogPublishModal) {
   $('#blogCloseBtn').addEventListener('click', () => { blogPublishModal.hidden = true; });
   blogPublishModal.addEventListener('click', (e) => { if (e.target === blogPublishModal) blogPublishModal.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !blogPublishModal.hidden) blogPublishModal.hidden = true; });
-}
 }
 
 /* AI 流式打字机浮层按钮：应用 / 取消 / 停止 / 自动续写开关 */
@@ -2862,25 +3019,31 @@ function getCaretPosCached(el, position) {
   return pos;
 }
 
+// 浮动工具条定位共用逻辑：按选区末端视口坐标计算 left/top/transform（含上方空间不足翻转）
+function positionToolbar(el, s, e) {
+  if (!el) return;
+  const pos = getCaretPosCached(editor, e);           // 选区末端坐标（内容坐标，带缓存）
+  const rect = editor.getBoundingClientRect();
+  const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
+  const y = rect.top + pos.top - editor.scrollTop;
+  el.hidden = false;
+  const tw = el.offsetWidth, th = el.offsetHeight;
+  const left = Math.max(tw / 2 + 6, Math.min(x, window.innerWidth - tw / 2 - 6));
+  el.style.left = left + 'px';
+  el.style.top = y + 'px';
+  // 上方空间不足则翻到选区下方
+  const placeBelow = (y - th - 12) < 0;
+  el.style.transform = placeBelow
+    ? 'translate(-50%, 12px)'
+    : 'translate(-50%, calc(-100% - 12px))';
+}
+
 function showAiToolbar() {
   if (!aiToolbar) return;
   const s = editor.selectionStart, e = editor.selectionEnd;
   if (s === e) { hideAiToolbar(); return; } // 无选区则隐藏
   aiSel = { start: s, end: e };
-  const pos = getCaretPosCached(editor, e);           // 选区末端坐标（内容坐标，带缓存）
-  const rect = editor.getBoundingClientRect();
-  const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
-  const y = rect.top + pos.top - editor.scrollTop;
-  aiToolbar.hidden = false;
-  const tw = aiToolbar.offsetWidth, th = aiToolbar.offsetHeight;
-  const left = Math.max(tw / 2 + 6, Math.min(x, window.innerWidth - tw / 2 - 6));
-  aiToolbar.style.left = left + 'px';
-  aiToolbar.style.top = y + 'px';
-  // 上方空间不足则翻到选区下方
-  const placeBelow = (y - th - 12) < 0;
-  aiToolbar.style.transform = placeBelow
-    ? 'translate(-50%, 12px)'
-    : 'translate(-50%, calc(-100% - 12px))';
+  positionToolbar(aiToolbar, s, e);
 }
 
 function hideAiToolbar() {
@@ -2898,19 +3061,7 @@ function showFormatBrush() {
   const s = editor.selectionStart, e = editor.selectionEnd;
   if (s === e) { hideFormatBrush(); return; }   // 无选区则隐藏
   fmtSel = { start: s, end: e };
-  const pos = getCaretPosCached(editor, e);   // 选区末端坐标（内容坐标，带缓存）
-  const rect = editor.getBoundingClientRect();
-  const x = rect.left + pos.left - editor.scrollLeft;   // 视口坐标
-  const y = rect.top + pos.top - editor.scrollTop;
-  formatBrush.hidden = false;
-  const tw = formatBrush.offsetWidth, th = formatBrush.offsetHeight;
-  const left = Math.max(tw / 2 + 6, Math.min(x, window.innerWidth - tw / 2 - 6));
-  formatBrush.style.left = left + 'px';
-  formatBrush.style.top = y + 'px';
-  const placeBelow = (y - th - 12) < 0;
-  formatBrush.style.transform = placeBelow
-    ? 'translate(-50%, 12px)'
-    : 'translate(-50%, calc(-100% - 12px))';
+  positionToolbar(formatBrush, s, e);
 }
 function hideFormatBrush() { if (formatBrush) formatBrush.hidden = true; }
 
@@ -3286,6 +3437,17 @@ function nasBasicAuth() {
   const auth = localStorage.getItem('nas-auth') || '';
   try { return auth ? 'Basic ' + btoa(auth) : ''; } catch (_) { return ''; }
 }
+// 确保 NAS 凭据可用：缺失时本机输入一次并存 localStorage（不进仓库）；用户取消返回 null
+async function ensureNasAuth(label) {
+  let auth = localStorage.getItem('nas-auth') || '';
+  if (!auth) {
+    auth = (await askInput('请输入 NAS ' + (label || '') + '凭据（格式 user:password，仅本机保存）：', { password: true })) || '';
+    if (!auth) return null;
+    try { localStorage.setItem('nas-auth', auth); } catch (_) {}
+    updateNasMenuHint();   // 凭据已配置，去掉菜单的「（需凭据）」提示
+  }
+  return auth;
+}
 
 // 从 knowly.want.biz 归档链接，或纯文件名中解析出 uploads 目录里的文件名（仅 basename）
 function extractNasFilename(input) {
@@ -3320,13 +3482,8 @@ function nasArchiveUrl(input) {
 async function uploadToNas() {
   if (!editor.value.trim()) { flash('文档为空，无需上传'); return; }
   // 凭据缺失时本机输入一次，仅存 localStorage（不进仓库）
-  let auth = localStorage.getItem('nas-auth') || '';
-  if (!auth) {
-    auth = window.prompt('请输入 NAS 上传凭据（格式 user:password，仅本机保存）：', '') || '';
-    if (!auth) { flash('未配置 NAS 凭据，已取消上传'); return; }
-    try { localStorage.setItem('nas-auth', auth); } catch (_) {}
-    updateNasMenuHint();   // 凭据已配置，去掉菜单的「（需凭据）」提示
-  }
+  const auth = await ensureNasAuth('上传');
+  if (!auth) { flash('未配置 NAS 凭据，已取消上传'); return; }
   let authHeader = '';
   try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return; }
   const blob = new Blob([editor.value], { type: 'text/markdown' });
@@ -3339,7 +3496,7 @@ async function uploadToNas() {
   try {
     const probe = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name), { headers: { 'Authorization': authHeader } });
     if (probe.status === 200) {
-      const ok = window.confirm(
+      const ok = await askConfirm('继续上传？',
         '⚠️ 服务端已存在同名文件「' + name + '」。\n' +
         '上传后，服务端会把现有版本归档为「' + name + '_<时间戳>.md」，并用当前内容覆盖。\n' +
         '（归档旧版不会丢失，可手动按归档名下载找回）\n\n' +
@@ -3396,13 +3553,8 @@ async function downloadFromNas(input) {
   }
 
   // 凭据缺失时本机输入一次，仅存 localStorage（不进仓库）
-  let auth = localStorage.getItem('nas-auth') || '';
-  if (!auth) {
-    auth = window.prompt('请输入 NAS 下载凭据（格式 user:password，仅本机保存）：', '') || '';
-    if (!auth) { flash('未配置 NAS 凭据，已取消下载'); return null; }
-    try { localStorage.setItem('nas-auth', auth); } catch (_) {}
-    updateNasMenuHint();   // 凭据已配置，去掉菜单的「（需凭据）」提示
-  }
+  const auth = await ensureNasAuth('下载');
+  if (!auth) { flash('未配置 NAS 凭据，已取消下载'); return null; }
   let authHeader = '';
   try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return null; }
 
@@ -3432,7 +3584,7 @@ async function nasOpen(input) {
   // 若编辑器内已有非空、且与远程不同的内容，直接覆盖会丢失本地改动。
   const local = editor.value || '';
   if (local.trim() !== '' && local.trim() !== String(text).trim()) {
-    const ok = window.confirm(
+    const ok = await askConfirm('下载并覆盖本地？',
       '本地编辑器已有未保存的改动，直接下载「' + filename + '」会丢失这些改动！\n' +
       '点击「确定」：先把本地当前内容备份到本机草稿（localStorage），再下载远程版本。\n' +
       '点击「取消」：放弃下载，保留本地内容。'
@@ -3459,7 +3611,7 @@ async function nasOpen(input) {
 
 // 菜单：从 NAS 下载某一篇文档并用编辑器打开
 async function nasDownloadAndOpen() {
-  const input = prompt('输入 NAS 文件名（如 180032_xxx.md）或 ' + NAS_ARCHIVE_DOMAIN + ' 归档链接：', '');
+  const input = await askInput('从 NAS 打开', { desc: '输入文件名（如 180032_xxx.md）或 ' + NAS_ARCHIVE_DOMAIN + ' 归档链接' });
   if (!input) return;
   await nasOpen(input);
 }
@@ -3848,14 +4000,36 @@ function insertAtCursor(text) {
   editor.dispatchEvent(new Event('input'));   // 触发 afterChange（渲染 / 统计 / 草稿）
   editor.focus();
 }
+// 大图压缩：>2MB 时经 canvas 降采样（长边≤2560px）并转 webp，
+// 压缩后仍大于原图（如已高度压缩的图）则原样返回；失败也原样返回（保证可用性）
+async function compressImage(file) {
+  const MAX_SIDE = 2560;
+  const MAX_BYTES = 2 * 1024 * 1024;
+  if (!file || file.size <= MAX_BYTES) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    let w = bitmap.width, h = bitmap.height;
+    const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+    if (scale < 1) { w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale)); }
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    if (bitmap.close) bitmap.close();
+    let blob = await new Promise((res) => canvas.toBlob(res, 'image/webp', 0.82));
+    if (!blob) blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
+    if (blob && blob.size < file.size) return blob;
+    return file;
+  } catch (_) { return file; }
+}
 async function insertImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
   if (file.size > 2 * 1024 * 1024) {
-    if (!confirm('图片较大（' + Math.round(file.size / 1024) + ' KB），将作为 Blob 存入文库（不占正文体积），继续？')) return;
+    if (!(await askConfirm('压缩后插入', '图片较大（' + Math.round(file.size / 1024) + ' KB），将自动压缩后插入，继续？'))) return;
   }
-  // 文库不可用（无 IndexedDB）→ 回退 base64 内联，保证可用
+  const img = await compressImage(file);   // >2MB 自动压缩（降采样 + 转 webp），IDB 与 base64 两条路径体积都受限
+  // 文库不可用（无 IndexedDB）→ 回退 base64 内联，保证可用（压缩后体积已受控）
   if (!libDb) {
-    const url = await fileToDataURL(file);
+    const url = await fileToDataURL(img);
     insertAtCursor('\n![' + (file.name || 'image') + '](' + url + ')\n');
     flash('已插入图片');
     return;
@@ -3863,7 +4037,7 @@ async function insertImage(file) {
   // 正文只存 libimg://<id> 引用，图片 Blob 单独入库，文档体积与同步开销大幅下降
   const id = genId();
   try {
-    await idbPutImage({ id, name: file.name || 'image', type: file.type, blob: file });
+    await idbPutImage({ id, name: file.name || 'image', type: img.type, blob: img });
   } catch (_) {
     flash('图片入库失败');
     return;
@@ -4089,7 +4263,12 @@ function openLibDb() {
       libDb = req.result;
       // 浏览器可能因后台回收、存储压力等关闭空闲连接，重置 libDb 以便下次 openLibDb() 重连
       libDb.onclose = () => { libDb = null; };
-      libDb.onversionchange = () => { libDb.close(); libDb = null; };
+      libDb.onversionchange = () => {
+        toast('检测到文库数据被其他标签页更新，正在重新连接…', 'info', 3000);
+        libDb.close();
+        libDb = null;
+        setTimeout(() => { openLibDb().catch(() => { libDb = null; }); }, 500);   // 避开对方升级事务窗口再重连
+      };
       resolve(libDb);
     };
     req.onerror = () => reject(req.error);
@@ -4156,7 +4335,7 @@ async function gcOrphanImages({ silent = false } = {}) {
     if (!silent) {
       flash(removed > 0 ? ('🧹 已清理 ' + removed + ' 张未引用的图片') : '🧹 没有需要清理的孤儿图片');
     } else if (removed > 0) {
-      console.info('[gc] 清理孤儿图片 ' + removed + ' 张');
+      // 孤儿图片清理是静默后台任务，不输出噪音日志
     }
     return removed;
   } catch (_) {
@@ -4240,11 +4419,14 @@ async function removeAppBg() {
 function openBgDialog() {
   const dlg = document.getElementById('bgModal');
   const preview = document.getElementById('bgPreview');
+  if (!dlg || !preview) return;
   if (appBgUrl) { preview.style.backgroundImage = 'url("' + appBgUrl + '")'; preview.classList.add('has-img'); }
   else { preview.classList.remove('has-img'); preview.style.backgroundImage = ''; }
   const s = readBgSettings();
-  document.getElementById('bgScrim').value = (s.scrim != null) ? s.scrim : 0.7;
-  document.getElementById('bgFit').value = s.fit || 'cover';
+  const scrimEl = document.getElementById('bgScrim');
+  const fitEl = document.getElementById('bgFit');
+  if (scrimEl) scrimEl.value = (s.scrim != null) ? s.scrim : 0.7;
+  if (fitEl) fitEl.value = s.fit || 'cover';
   dlg.hidden = false;
 }
 
@@ -4316,7 +4498,8 @@ function closeLibrary() {
 }
 function toggleLibrary() { libDrawer.classList.contains('open') ? closeLibrary() : openLibrary(); }
 if (libBtn) libBtn.addEventListener('click', toggleLibrary);
-$('#libClose').addEventListener('click', closeLibrary);
+const libCloseBtn = $('#libClose');
+if (libCloseBtn) libCloseBtn.addEventListener('click', closeLibrary);
 if (libScrim) libScrim.addEventListener('click', closeLibrary);
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && libDrawer && libDrawer.classList.contains('open')) closeLibrary();
@@ -4326,6 +4509,7 @@ document.addEventListener('keydown', (e) => {
 const libMusic = $('#libMusic');
 const libMusicToggle = $('#libMusicToggle');
 if (libMusicToggle) libMusicToggle.addEventListener('click', () => {
+  if (!libMusic) return;
   const open = libMusic.hidden;
   libMusic.hidden = !open;
   libMusicToggle.setAttribute('aria-expanded', String(open));
@@ -4461,7 +4645,7 @@ $('#libNew').addEventListener('click', newLibDoc);
 async function renameLibDoc(id) {
   const doc = await idbGet(id).catch(() => null);
   if (!doc) return;
-  const n = prompt('文件名：', doc.name || '未命名.md');
+  const n = await askInput('重命名', { def: doc.name || '未命名.md' });
   if (!n || !n.trim()) return;
   doc.name = n.trim();
   doc.updatedAt = Date.now();
@@ -4472,7 +4656,7 @@ async function renameLibDoc(id) {
 }
 async function deleteLibDoc(id) {
   const doc = await idbGet(id).catch(() => null);
-  if (!confirm('删除「' + (doc ? doc.name : '该文档') + '」？此操作不可恢复。')) return;
+  if (!(await askConfirm('删除文档', '删除「' + (doc ? doc.name : '该文档') + '」？此操作不可恢复。'))) return;
   try { await idbDelete(id); } catch (_) {}
   if (id === currentLibId) {
     currentLibId = null;
@@ -4545,6 +4729,7 @@ if (libFileInput) {
 
 /* 自动回写：打开文库文档后，每次编辑去抖写入 IndexedDB，并保留版本历史 */
 const MAX_HISTORY = 20;
+const MAX_HISTORY_SNAPSHOT = 200000;   // 历史快照单条内容上限 200KB：大文档不整文存 20 份（1MB×20=21MB 全量读写），超限存截断快照
 const writebackLibDebounced = debounce(() => { writebackLib(); }, 800);
 function writebackLib() {
   if (!currentLibId || !libDb) return;
@@ -4556,10 +4741,12 @@ function writebackLib() {
     if (oldDoc && oldDoc.content === newContent) {
       return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
     }
+    const overLimit = newContent.length > MAX_HISTORY_SNAPSHOT;
     history.push({
       at: Date.now(),
       summary: newContent.slice(0, 200) + (newContent.length > 200 ? '…' : ''),
-      content: newContent,
+      content: overLimit ? newContent.slice(0, MAX_HISTORY_SNAPSHOT) : newContent,
+      truncated: overLimit,   // 大文档仅存前 200KB，恢复时提示不完整
     });
     if (history.length > MAX_HISTORY) history.shift();   // 只留最近 20 条
     return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
@@ -4581,11 +4768,12 @@ async function showHistoryModal(docId) {
   const list = doc.history.map((h, i) =>
     `${i + 1}. ${new Date(h.at).toLocaleString('zh-CN')} - ${h.summary}`
   ).join('\n');
-  const choice = prompt(`选择要恢复的版本（输入编号 1-${doc.history.length}）：\n\n${list}`);
+  const choice = await askInput(`选择要恢复的版本（输入编号 1-${doc.history.length}）：`, { desc: list });
   const idx = parseInt(choice, 10) - 1;
   if (isNaN(idx) || idx < 0 || idx >= doc.history.length) return;
   const target = doc.history[idx];
-  if (!confirm(`恢复至 ${new Date(target.at).toLocaleString('zh-CN')} 的版本？当前内容将被覆盖。`)) return;
+  if (target.truncated) toast('⚠️ 该版本为大文档截断快照（仅含前 200KB），恢复后内容不完整', 'info', 6000);
+  if (!(await askConfirm('恢复版本', `恢复至 ${new Date(target.at).toLocaleString('zh-CN')} 的版本？当前内容将被覆盖。`))) return;
 
   editor.value = target.content;
   currentName = doc.name;
@@ -5126,3 +5314,26 @@ editor.addEventListener('keydown', vimKeydown, true);   // 捕获阶段：优先
 
 // 初始化：依据 localStorage 还原开关状态与初始标签
 updateVimUI();
+
+// 多标签页草稿同步：其他标签页更新 md-draft 时提示（不自动覆盖当前输入，避免丢字）
+window.addEventListener('storage', (e) => {
+  if (!e || e.key !== 'md-draft' || e.newValue == null) return;
+  if (e.newValue !== editor.value) {
+    toast('另一标签页已更新草稿，当前页内容可能过期，请手动刷新', 'info', 5000);
+  }
+});
+
+// === 全局错误兜底：未捕获异常 / 未处理 rejection 不再静默吞掉，toast 提示（带防刷屏） ===
+let lastErrToastAt = 0;
+function toastGlobalErr(msg) {
+  const now = Date.now();
+  if (now - lastErrToastAt < 2000) return;   // 2s 内只提示一次，避免连发刷屏
+  lastErrToastAt = now;
+  toast('⚠️ ' + msg, 'err', 5000);
+}
+window.addEventListener('error', (e) => { toastGlobalErr((e && e.message) || '未知脚本错误'); });
+window.addEventListener('unhandledrejection', (e) => {
+  if (e && e.preventDefault) e.preventDefault();
+  const r = e && e.reason;
+  toastGlobalErr((r && r.message) || String(r || '未处理 Promise 错误'));
+});

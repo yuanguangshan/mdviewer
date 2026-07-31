@@ -226,6 +226,7 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 .statusbar #readInfo { flex: 1; text-align: center; min-width: 0; }
 .statusbar #fileName { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
 #saveState.flash { color: var(--accent-soft); font-weight: 700; }
+#saveState.warn { color: #e06c75; font-weight: 600; }   /* 草稿容量保护提示 */
 .statusbar .version { opacity: .45; font-size: 11px; }
 /* NAS 静默增量同步状态点：idle 灰 / syncing 蓝脉冲 / ok 绿 / error 红 */
 .sync-dot {
