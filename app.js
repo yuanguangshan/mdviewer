@@ -2163,6 +2163,31 @@ function aiSocialRewrite(mode) {
   });
 }
 
+// 应用内「输入提示词」容器（modal）：无选中/剪贴板内容时询问用户。
+// 返回 Promise<string|null>：确认=输入内容（trim 后为空视为取消），取消/遮罩/Esc=null。
+function askAiPrompt(desc) {
+  const modal = document.getElementById('aiPromptModal');
+  const input = document.getElementById('aiPromptInput');
+  // 无容器兜底（防静态 HTML 缺失）：退回系统 prompt
+  if (!modal || !input) return Promise.resolve(window.prompt('请输入主题或提示词：', '') || null);
+  return new Promise((resolve) => {
+    const descEl = document.getElementById('aiPromptDesc');
+    if (descEl) descEl.textContent = desc || '未检测到选中文字或剪贴板内容，请直接输入。';
+    input.value = '';
+    modal.hidden = false;
+    input.focus();
+    let settled = false;
+    const finish = (val) => { if (settled) return; settled = true; modal.hidden = true; resolve(val); };
+    document.getElementById('aiPromptOk').onclick = () => finish(input.value.trim() || null);
+    document.getElementById('aiPromptCancel').onclick = () => finish(null);
+    modal.onclick = (e) => { if (e.target === modal) finish(null); };          // 点遮罩关闭
+    input.onkeydown = (e) => {                                                  // Enter 提交；Shift+Enter 换行；Esc 关闭
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); finish(input.value.trim() || null); }
+      else if (e.key === 'Escape') { e.stopPropagation(); finish(null); }
+    };
+  });
+}
+
 // ===== AI 逐章写作：参照文档中的书籍大纲，一章一章自动续写 =====
 // 中文数字 → 阿拉伯数字（支持 一~九百九十九 与纯数字，如 十=10、二十三=23、一百零五=105）
 function cnChapterNum(s) {
@@ -2278,16 +2303,19 @@ const AI_ACTIONS = {
     aiProcessSelection('将以下文本准确翻译为地道英文，保留 Markdown 格式，只输出译文：', '翻译');
   },
   // 按提示词生成文章，流式打字机展示，结束后插入光标处
-  // 行为：若已选中文字，则直接把选区作为提示词发送（不弹窗）；无选区时才询问用户
-  aiGenerate() {
+  // 提示词来源三级取用：① 选中文字（直接发送，不弹窗）→ ② 剪贴板内容 → ③ 应用内容器询问
+  async aiGenerate() {
     // 必须在最开头捕获选区（浮层/应用按钮会夺走焦点），且不可在 onApply 里二次读取
     const s = editor.selectionStart, e = editor.selectionEnd;
-    const selected = editor.value.slice(s, e).trim();
-    let topic;
-    if (selected) {
-      topic = selected;                 // 有选中：选区即提示词，直接发送
-    } else {
-      topic = window.prompt('请输入主题或提示词：', '');
+    let topic = editor.value.slice(s, e).trim();      // ① 优先：选区即提示词
+    if (!topic && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const clip = (await navigator.clipboard.readText() || '').trim();
+        if (clip) { topic = clip; toast('已使用剪贴板内容作为提示词', 'info'); }
+      } catch (_) { /* 无剪贴板权限/非安全上下文：继续走容器询问 */ }
+    }
+    if (!topic) {                                     // ② 兜底：应用内容器询问
+      topic = await askAiPrompt();
       if (!topic) { toast('已取消', 'info'); return; }
     }
     aiRunStream({

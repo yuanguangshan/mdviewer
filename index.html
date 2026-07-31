@@ -193,7 +193,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v3.3</span>
+      <span class="version">v3.4</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -313,6 +313,19 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
+
+  <!-- AI 提示词输入容器：无选中文字且剪贴板为空时询问用户 -->
+  <div class="modal" id="aiPromptModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="输入提示词">
+      <div class="modal-title">💡 输入主题或提示词</div>
+      <p class="modal-desc" id="aiPromptDesc">未检测到选中文字或剪贴板内容，请直接输入。</p>
+      <textarea id="aiPromptInput" rows="5" placeholder="例如：写一篇关于 AI 写作工具对比的文章…" spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button id="aiPromptCancel" type="button">取消</button>
+        <button id="aiPromptOk" type="button" class="primary">生成</button>
+      </div>
+    </div>
+  </div>
 
   <!-- AI 设置弹窗（BYOK：Key 仅存本机 localStorage） -->
   <div class="modal" id="aiSettingsModal" hidden>

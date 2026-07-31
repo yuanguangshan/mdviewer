@@ -394,6 +394,12 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
   border: 1px solid var(--border); background: var(--bg); color: var(--text);
   font-size: 13px; font-family: var(--mono, ui-monospace, monospace); }
 .modal-box input:focus { outline: none; border-color: var(--accent); }
+/* AI 提示词输入容器：多行文本域与 input 同风格 */
+.modal-box textarea { width: 100%; box-sizing: border-box; margin-top: 12px; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 13px; font-family: var(--mono, ui-monospace, monospace); line-height: 1.6;
+  resize: vertical; min-height: 96px; }
+.modal-box textarea:focus { outline: none; border-color: var(--accent); }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 .modal-actions button { padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--bg-soft); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
