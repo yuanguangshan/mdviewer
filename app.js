@@ -7,6 +7,7 @@ const previewPane = $('#previewPane');
 const gutter = $('#gutter');
 const editorHighlight = $('#editorHighlight');
 const fileInput = $('#fileInput');
+const readingProgress = $('#readingProgress');
 
 // ============ 版本更新：手动模式 ============
 // 检测到新 SW 后仅弹出「更新条」提示，由用户点击「立即刷新」主动重载；
@@ -1145,6 +1146,53 @@ previewPane.addEventListener('scroll', () => {
 });
 preview.addEventListener('click', onPreviewAnchorClick);   // 预览内点击 #锚点 → 同步滚动编辑器到对应行
 
+// === SECTION: 阅读进度 ===
+// 文库文档的阅读位置记忆 + 顶部细线进度条
+
+function readingScrollRatio() {
+  const el = (viewMode === 'preview') ? previewPane : editor;
+  const sMax = el.scrollHeight - el.clientHeight;
+  return sMax > 0 ? Math.min(1, el.scrollTop / sMax) : 0;
+}
+
+function updateReadingProgress() {
+  if (!readingProgress) return;
+  readingProgress.style.width = currentLibId ? (readingScrollRatio() * 100) + '%' : '0';
+}
+
+// 保存阅读进度到文库文档（2s 去抖，远低于同滚频率，未打开文库文档时即跳过）
+const saveReadingProgress = debounce(() => {
+  if (!currentLibId || !libDb) return;
+  const ratio = readingScrollRatio();
+  idbGet(currentLibId).then((doc) => {
+    if (!doc) return;
+    doc.scrollRatio = ratio;
+    doc.lastReadAt = Date.now();
+    return idbPut(doc);
+  }).catch(() => {});
+}, 2000);
+
+// 恢复到上次阅读位置（延迟双 rAF，等预览渲染完成、scrollHeight 稳定）
+function restoreReadingProgress() {
+  if (!currentLibId) return;
+  idbGet(currentLibId).then((doc) => {
+    if (!doc || doc.scrollRatio == null) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = (viewMode === 'preview') ? previewPane : editor;
+        const sMax = el.scrollHeight - el.clientHeight;
+        if (sMax > 0) el.scrollTop = doc.scrollRatio * sMax;
+        updateReadingProgress();
+      });
+    });
+  }).catch(() => {});
+}
+
+editor.addEventListener('scroll', updateReadingProgress);
+previewPane.addEventListener('scroll', updateReadingProgress);
+editor.addEventListener('scroll', saveReadingProgress);
+previewPane.addEventListener('scroll', saveReadingProgress);
+
 // === SECTION: 草稿自动保存（去抖 + 静默 + 容错） ===
 let curSaveClass = '';
 let curSaveText = '就绪';
@@ -1184,10 +1232,11 @@ function flushSave() {
     }
   } catch (_) {}
   if (currentLibId && libDb) {
+    const ratio = readingScrollRatio();
     idbGet(currentLibId).then((oldDoc) => {
       const history = (oldDoc && oldDoc.history) || [];
       // 只写最新内容与历史（不 push 新快照），避免卸载前异步链过长中断
-      return idbPut({ id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
+      return idbPut({ id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now(), history, autoName: currentNameIsAuto, scrollRatio: ratio, lastReadAt: Date.now() });
     }).catch(() => {});
   }
 }
@@ -4605,6 +4654,7 @@ function openLibDocData(doc) {
   updateFileName();
   afterChange({ skipWriteback: true });   // 打开即载入，不应刷新更新时间
   syncPodcastOnLoad();
+  restoreReadingProgress();              // 恢复到上次阅读位置（rAF 延迟执行，在渲染之后）
   setSaveState('saved', '✓ 文库');
   renderLibrary();
 }
@@ -4743,7 +4793,7 @@ function writebackLib() {
     const history = (oldDoc && oldDoc.history) || [];
     // 内容未变：仅更新时间戳，不记快照（避免空转刷屏历史）
     if (oldDoc && oldDoc.content === newContent) {
-      return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
+      return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto, scrollRatio: (oldDoc && oldDoc.scrollRatio) || 0, lastReadAt: (oldDoc && oldDoc.lastReadAt) || null });
     }
     const overLimit = newContent.length > MAX_HISTORY_SNAPSHOT;
     history.push({
@@ -4753,7 +4803,7 @@ function writebackLib() {
       truncated: overLimit,   // 大文档仅存前 200KB，恢复时提示不完整
     });
     if (history.length > MAX_HISTORY) history.shift();   // 只留最近 20 条
-    return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto });
+    return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto, scrollRatio: (oldDoc && oldDoc.scrollRatio) || 0, lastReadAt: (oldDoc && oldDoc.lastReadAt) || null });
   }).then(() => {
     setSaveState('saved', '✓ 已存文库');
     const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
