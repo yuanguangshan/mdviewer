@@ -3291,6 +3291,8 @@ const QUICK_CATALOG = [
   { id: 'nas-download', label: '📥 从 NAS 下载', kind: 'act', act: 'nas-download', group: 'doc' },
   { id: 'addtolib', label: '📚 添加到文库', kind: 'act', act: 'addtolib', group: 'doc' },
   { id: 'publish-blog', label: '📝 发布到博客', kind: 'act', act: 'publish-blog', group: 'doc' },
+  { id: 'save-ima', label: '💾 保存到 IMA 笔记', kind: 'act', act: 'save-ima', group: 'doc' },
+  { id: 'ima-settings', label: '⚙️ IMA 笔记设置', kind: 'act', act: 'ima-settings', group: 'doc' },
   { id: 'publish-podcast', label: '🎙️ 文档转播客', kind: 'act', act: 'publish-podcast', group: 'doc' },
   { id: 'nas-upload', label: '📤 上传到 NAS', kind: 'act', act: 'nas-upload', group: 'doc' },
   { id: 'md', label: '⬇️ 导出 Markdown', kind: 'act', act: 'md', group: 'export' },
@@ -3811,6 +3813,8 @@ function handleDataAct(act, btn) {
   if (act === 'rename') renameFile();
   else if (act === 'addtolib') addToLibrary();
   else if (act === 'publish-blog') publishToBlog();
+  else if (act === 'save-ima') saveToIma();
+  else if (act === 'ima-settings') openImaSettings();
   else if (act === 'publish-podcast') publishToPodcast();
   else if (act === 'match-podcast') matchPodcastManual();
   else if (act === 'nas-upload') uploadToNas();
@@ -3976,6 +3980,144 @@ async function publishToBlog() {
     toast('❌ 发布失败：' + (err.message || err), 'err', 5000);
     flash('发布失败');
   }
+}
+
+// === SECTION: 保存到 IMA 笔记（POST 到自托管 ima 代理，密钥只存服务端，浏览器无 CORS 问题） ===
+// 背景：腾讯 ima 的 OpenAPI（/openapi/note/v1/import_doc）要求携带
+//   ima-openapi-clientid / ima-openapi-apikey 两个自定义请求头，
+//   但这两个头不在 ima.qq.com 的 CORS Access-Control-Allow-Headers 白名单里，
+//   浏览器直连会被 CORS 拦截。因此统一走「浏览器 → 自托管代理 → ima.qq.com」，
+//   与「发布到博客」共用同一前端形态，密钥保存在服务端 env / Worker secret。
+// 代理只需把前端 POST 来的 { title, content, content_format } 转发给
+//   https://ima.qq.com/openapi/note/v1/import_doc 并注入 ima 凭证头即可。
+// 前端仅新增一个可配置端点（IMA_PROXY_URL），与 R2_WORKER_URL 同属「唯一后端耦合点」约定。
+const IMA_CFG_KEY = 'md-ima-config';
+const IMA_PROXY_DEFAULT = 'https://api.yuangs.cc/api/ima/import';
+function readImaConfig() {
+  try { return JSON.parse(localStorage.getItem(IMA_CFG_KEY) || '{}'); } catch (_) { return {}; }
+}
+function showImaResultModal(docId, url, title) {
+  const modal = $('#imaResultModal');
+  const ta = $('#imaUrlText');
+  if (ta) ta.value = url || '';
+  const tt = $('#imaResultTitle');
+  if (tt) tt.value = title || '';
+  if (modal) modal.removeAttribute('hidden');
+  if (url && navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+  toast('✅ 已保存到 IMA 笔记', 'ok');
+}
+async function saveToIma() {
+  const md = (editor.value || '').trim();
+  if (!md) { flash('没有内容：请先写点东西再保存'); return; }
+  const { title, tags, body } = parseBlogMeta(md);
+  const cfg = readImaConfig();
+  let proxy = (cfg.proxy || '').trim() || IMA_PROXY_DEFAULT;
+  // 未配置代理端点：先弹设置让用户填（或确认默认值）
+  if (!cfg.proxy) {
+    const ok = await askImaProxyViaModal(proxy);
+    if (!ok) return;
+    proxy = (readImaConfig().proxy || '').trim() || IMA_PROXY_DEFAULT;
+  }
+  flash('正在保存到 IMA 笔记…');
+  try {
+    const result = await blogPostJSON(proxy, {
+      title,
+      content: body,
+      content_format: 1,
+      tags: (Array.isArray(tags) && tags.length) ? tags.join(',') : defaultBlogTags()
+    });
+    const docId = result && (result.doc_id || result.docId || (result.data && result.data.doc_id));
+    if (docId) {
+      const url = result.url || ('https://ima.qq.com/note/' + docId);
+      showImaResultModal(docId, url, title);
+      flash('已保存到 IMA 笔记');
+    } else {
+      const msg = (result && (result.message || result.error || result.msg))
+        ? (result.message || result.error || result.msg)
+        : JSON.stringify(result);
+      toast('❌ 保存失败：' + msg, 'err', 5000);
+      flash('保存失败');
+    }
+  } catch (err) {
+    toast('❌ 保存失败：' + (err.message || err), 'err', 5000);
+    flash('保存失败');
+  }
+}
+// 未配置 ima 代理端点时，弹应用内设置浮层（复用 #imaSettingsModal 模式）
+function askImaProxyViaModal(defaultProxy) {
+  return new Promise((resolve) => {
+    const m = $('#imaSettingsModal');
+    if (!m) return resolve(false);
+    const inp = $('#imaProxyUrl');
+    if (inp) inp.value = defaultProxy || IMA_PROXY_DEFAULT;
+    m.hidden = false;
+    if (inp) inp.focus();
+    const timer = setInterval(() => {
+      if (m.hidden) { clearInterval(timer); resolve(true); }
+    }, 200);
+  });
+}
+function openImaSettings() {
+  const cfg = readImaConfig();
+  const inp = $('#imaProxyUrl');
+  if (inp) inp.value = cfg.proxy || IMA_PROXY_DEFAULT;
+  const m = $('#imaSettingsModal');
+  if (m) m.hidden = false;
+}
+function saveImaSettings() {
+  const proxy = ($('#imaProxyUrl') && $('#imaProxyUrl').value.trim()) || IMA_PROXY_DEFAULT;
+  try { localStorage.setItem(IMA_CFG_KEY, JSON.stringify({ proxy })); } catch (_) {}
+  const m = $('#imaSettingsModal');
+  if (m) m.hidden = true;
+  toast('IMA 端点已保存（仅本机）', 'ok');
+}
+// 测试 ima 代理连通性：POST 一个极小的空文档（若已配好，返回 doc_id 即证明链路通）
+async function testImaConnection() {
+  const proxy = ($('#imaProxyUrl') && $('#imaProxyUrl').value.trim()) || readImaConfig().proxy || IMA_PROXY_DEFAULT;
+  if (!proxy) { toast('请先填写 IMA 代理端点', 'err'); return; }
+  toast('正在测试 ima 代理…', 'info', 30000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const resp = await fetch(proxy, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: ctrl.signal,
+      body: JSON.stringify({ title: '测试 - 连接验证', content: '#' + ' 测试\n\n这是一条连接测试。', content_format: 1 })
+    });
+    clearTimeout(timer);
+    let body = {};
+    try { body = await resp.json(); } catch (_) {}
+    if (!resp.ok) { toast('连接成功但请求失败：HTTP ' + resp.status + ' ' + (body.msg || body.message || body.error || ''), 'err', 6000); return; }
+    const docId = body && (body.doc_id || body.docId || (body.data && body.data.doc_id));
+    if (docId) toast('✅ IMA 代理连通，已生成测试笔记（doc_id=' + docId + '）', 'ok', 5000);
+    else toast('⚠️ 代理有响应但未返回 doc_id，请检查服务端是否转发到 ima', 'warn', 6000);
+  } catch (e) {
+    clearTimeout(timer);
+    if (e && e.name === 'AbortError') toast('测试超时（>20s），请检查代理端点/网络', 'err', 6000);
+    else toast('连接失败：' + aiErrorHint(e, proxy), 'err', 6000);
+  }
+}
+const imaCalModalCfg = $('#imaSettingsModal');
+if (imaCalModalCfg) {
+  const sv = $('#imaSettingsSave'), can = $('#imaSettingsCancel'), ts = $('#imaTest');
+  if (sv) sv.addEventListener('click', saveImaSettings);
+  if (can) can.addEventListener('click', () => { imaCalModalCfg.hidden = true; });
+  if (ts) ts.addEventListener('click', testImaConnection);
+  imaCalModalCfg.addEventListener('click', (e) => { if (e.target === imaCalModalCfg) imaCalModalCfg.hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !imaCalModalCfg.hidden) imaCalModalCfg.hidden = true; });
+}
+const imaResultModalEl = $('#imaResultModal');
+if (imaResultModalEl) {
+  const url = $('#imaUrlText');
+  const cp = $('#imaCopyBtn');
+  if (cp) cp.addEventListener('click', () => { if (url && url.value) navigator.clipboard.writeText(url.value).then(() => toast('已复制 IMA 链接', 'ok'), () => toast('复制失败', 'err')); });
+  const op = $('#imaOpenBtn');
+  if (op) op.addEventListener('click', () => { if (url && url.value) window.open(url.value, '_blank', 'noopener'); });
+  const cc = $('#imaCloseBtn');
+  if (cc) cc.addEventListener('click', () => { imaResultModalEl.hidden = true; });
+  imaResultModalEl.addEventListener('click', (e) => { if (e.target === imaResultModalEl) imaResultModalEl.hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !imaResultModalEl.hidden) imaResultModalEl.hidden = true; });
 }
 
 // === SECTION: 一键转播客（POST /api/publish，逻辑提取自 Taio 直读脚本，改用浏览器 fetch） ===

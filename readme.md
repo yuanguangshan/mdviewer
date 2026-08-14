@@ -39,6 +39,12 @@
 * **离线可用**：借助 Service Worker 缓存技术，即使在没有网络的环境下，也能像本地原生软件一样独立运行 [sw.js]。
 * **一键安装**：支持安装到 Windows、macOS、Android 或 iOS 的桌面与 Dock 栏，享受无边框的沉浸式体验 [manifest.webmanifest]。
 
+### 5. 💾 保存到 IMA 笔记（腾讯 ima AI 笔记）
+在右上角「⋯」菜单或左上方 logo 快捷菜单里选择 **「💾 保存到 IMA 笔记」**，即可把当前文档一键存入腾讯 ima AI 笔记，并拿到可分享的笔记链接。
+* **安全模型**：腾讯 ima 的 OpenAPI 需要 `ima-openapi-clientid` / `ima-openapi-apikey` 两个自定义请求头，且这两个头不在 ima 的浏览器 CORS 白名单里，因此**前端不能直连**。本功能走「浏览器 → 自托管代理（`api.yuangs.cc/api/ima/import`）→ ima.qq.com」的链路，**密钥只保存在服务端**（`/home/ubuntu/.env` 的 `IMA_OPENAPI_CLIENTID` / `IMA_OPENAPI_APIKEY`），浏览器端仅保存代理端点地址（`localStorage['md-ima-config']`）。
+* **可配置端点**：若代理部署在其他位置，通过 **「⚙️ IMA 笔记设置」** 修改端点（与 `R2_WORKER_URL` 同属「唯一后端耦合点」约定，改动需前端与代理同步）。
+* **与「发布到博客」互补**：博客用于公开分享，IMA 用于私有笔记沉淀，二者互不影响。
+
 ---
 
 ## 🚀 快速上手指南
