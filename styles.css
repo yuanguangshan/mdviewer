@@ -709,22 +709,22 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 
 /* —— One Dark —— */
 [data-md-theme="onedark"] .preview-pane { background: #282c34; }
-[data-md-theme="onedark"] .markdown-body { color: #abb2bf; }
+[data-md-theme="onedark"] .markdown-body { color: #ffffff; }
 [data-md-theme="onedark"] .markdown-body h1,
 [data-md-theme="onedark"] .markdown-body h2,
 [data-md-theme="onedark"] .markdown-body h3 { color: #e5c07b; }
 [data-md-theme="onedark"] .markdown-body h1,
 [data-md-theme="onedark"] .markdown-body h2 { border-bottom-color: #3b4048; }
 [data-md-theme="onedark"] .markdown-body a { color: #61afef; }
-[data-md-theme="onedark"] .markdown-body code { background: #2c313a; color: #abb2bf; }
+[data-md-theme="onedark"] .markdown-body code { background: #2c313a; color: #ffffff; }
 [data-md-theme="onedark"] .markdown-body pre { background: #21252b; border-color: #3b4048; }
-[data-md-theme="onedark"] .markdown-body pre code { color: #abb2bf; }
-[data-md-theme="onedark"] .markdown-body blockquote { color: #7f848e; border-left-color: #4b5263; background: rgba(255, 255, 255, .02); }
+[data-md-theme="onedark"] .markdown-body pre code { color: #ffffff; }
+[data-md-theme="onedark"] .markdown-body blockquote { color: #c8ccd4; border-left-color: #4b5263; background: rgba(255, 255, 255, .02); }
 [data-md-theme="onedark"] .markdown-body th { background: #2c313a; }
 [data-md-theme="onedark"] .markdown-body th,
 [data-md-theme="onedark"] .markdown-body td { border-color: #3b4048; }
 [data-md-theme="onedark"] .markdown-body hr { border-top-color: #3b4048; }
-[data-md-theme="onedark"] .markdown-body .hljs { color: #abb2bf; }
+[data-md-theme="onedark"] .markdown-body .hljs { color: #ffffff; }
 [data-md-theme="onedark"] .markdown-body .hljs-comment,
 [data-md-theme="onedark"] .markdown-body .hljs-quote { color: #5c6370; font-style: italic; }
 [data-md-theme="onedark"] .markdown-body .hljs-keyword,
@@ -787,24 +787,105 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 [data-md-theme="solarized"] .markdown-body .hljs-link,
 [data-md-theme="solarized"] .markdown-body .hljs-variable { color: #cb4b16; }
 
-/* —— Nord 极简（深）—— */
-[data-md-theme="nord"] .preview-pane { background: #2e3440; }
-[data-md-theme="nord"] .markdown-body { color: #d8dee9; }
+/* —— Nord 极简（深）· 现代科技感增强版 —— */
+/* 底噪：极淡的径向光晕，营造纵深，不再是死板的纯色块 */
+[data-md-theme="nord"] .preview-pane {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(136,192,208,.10), transparent 60%),
+    radial-gradient(900px 500px at 95% 0%, rgba(180,142,173,.08), transparent 55%),
+    #2e3440;
+}
+[data-md-theme="nord"] .markdown-body { color: #eceff4; }
+/* 标题：渐变文字 + 左侧霓虹光条，取代旧的下划线 */
 [data-md-theme="nord"] .markdown-body h1,
 [data-md-theme="nord"] .markdown-body h2,
-[data-md-theme="nord"] .markdown-body h3 { color: #88c0d0; }
+[data-md-theme="nord"] .markdown-body h3 {
+  color: #88c0d0;
+  border: 0;
+  padding-bottom: 0;
+  position: relative;
+}
 [data-md-theme="nord"] .markdown-body h1,
-[data-md-theme="nord"] .markdown-body h2 { border-bottom-color: #3b4252; }
-[data-md-theme="nord"] .markdown-body a { color: #88c0d0; }
-[data-md-theme="nord"] .markdown-body code { background: #3b4252; color: #d8dee9; }
-[data-md-theme="nord"] .markdown-body pre { background: #2e3440; border-color: #3b4252; }
-[data-md-theme="nord"] .markdown-body pre code { color: #d8dee9; }
-[data-md-theme="nord"] .markdown-body blockquote { color: #81a1c1; border-left-color: #4c566a; background: transparent; }
-[data-md-theme="nord"] .markdown-body th { background: #3b4252; }
+[data-md-theme="nord"] .markdown-body h2 {
+  padding-left: .62em;
+}
+/* 渐变文字仅在支持 background-clip:text 时启用，避免不支持时文字不可见 */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  [data-md-theme="nord"] .markdown-body h1,
+  [data-md-theme="nord"] .markdown-body h2 {
+    background: linear-gradient(92deg, #8fbcbb 0%, #88c0d0 45%, #b48ead 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
+[data-md-theme="nord"] .markdown-body h1::before,
+[data-md-theme="nord"] .markdown-body h2::before {
+  content: '';
+  position: absolute; left: 0; top: .18em; bottom: .18em;
+  width: 4px; border-radius: 3px;
+  background: linear-gradient(180deg, #88c0d0, #b48ead);
+  box-shadow: 0 0 12px rgba(136,192,208,.55);
+}
+[data-md-theme="nord"] .markdown-body h3 { color: #8fbcbb; padding-left: .5em; }
+[data-md-theme="nord"] .markdown-body h3::before {
+  content: '';
+  position: absolute; left: 0; top: .3em; bottom: .3em;
+  width: 3px; border-radius: 3px;
+  background: #8fbcbb; opacity: .8;
+}
+/* 链接：微光下划线，hover 发光 */
+[data-md-theme="nord"] .markdown-body a {
+  color: #88c0d0;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(136,192,208,.35);
+  transition: color .15s, border-color .15s, text-shadow .15s;
+}
+[data-md-theme="nord"] .markdown-body a:hover {
+  color: #8fbcbb;
+  border-bottom-color: #8fbcbb;
+  text-shadow: 0 0 10px rgba(143,188,187,.45);
+}
+/* 行内代码：胶囊 + 微妙内发光 */
+[data-md-theme="nord"] .markdown-body code {
+  background: rgba(59,66,82,.75);
+  color: #eceff4;
+  border: 1px solid rgba(143,188,187,.18);
+  padding: .16em .45em;
+}
+/* 代码块：玻璃拟态 + 顶部高光 */
+[data-md-theme="nord"] .markdown-body pre {
+  background: linear-gradient(180deg, rgba(67,76,94,.55), rgba(46,52,64,.85));
+  border: 1px solid rgba(143,188,187,.16);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.05);
+}
+[data-md-theme="nord"] .markdown-body pre code { color: #eceff4; background: none; border: 0; }
+/* 引用：柔和光晕背景 + 发光竖条 */
+[data-md-theme="nord"] .markdown-body blockquote {
+  color: #d8dee9;
+  border-left: 3px solid #88c0d0;
+  background: linear-gradient(90deg, rgba(136,192,208,.10), rgba(136,192,208,.02));
+  border-radius: 0 10px 10px 0;
+  padding: .5em 1em;
+  box-shadow: inset 0 0 24px rgba(136,192,208,.06);
+}
+/* 表格：细腻分隔 + 表头渐变 */
+[data-md-theme="nord"] .markdown-body th {
+  background: linear-gradient(180deg, rgba(143,188,187,.14), rgba(59,66,82,.6));
+  font-weight: 700;
+  letter-spacing: .2px;
+}
 [data-md-theme="nord"] .markdown-body th,
-[data-md-theme="nord"] .markdown-body td { border-color: #4c566a; }
-[data-md-theme="nord"] .markdown-body hr { border-top-color: #4c566a; }
-[data-md-theme="nord"] .markdown-body .hljs { color: #d8dee9; }
+[data-md-theme="nord"] .markdown-body td { border-color: rgba(76,86,106,.9); }
+[data-md-theme="nord"] .markdown-body tr:nth-child(even) td { background: rgba(59,66,82,.22); }
+/* 分隔线：渐隐光带 */
+[data-md-theme="nord"] .markdown-body hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(136,192,208,.55), transparent);
+}
+[data-md-theme="nord"] .markdown-body .hljs { color: #eceff4; }
 [data-md-theme="nord"] .markdown-body .hljs-comment,
 [data-md-theme="nord"] .markdown-body .hljs-quote { color: #616e88; font-style: italic; }
 [data-md-theme="nord"] .markdown-body .hljs-keyword,
@@ -829,22 +910,22 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 
 /* —— Gruvbox 复古（深）—— */
 [data-md-theme="gruvbox"] .preview-pane { background: #282828; }
-[data-md-theme="gruvbox"] .markdown-body { color: #ebdbb2; }
+[data-md-theme="gruvbox"] .markdown-body { color: #ffffff; }
 [data-md-theme="gruvbox"] .markdown-body h1,
 [data-md-theme="gruvbox"] .markdown-body h2,
 [data-md-theme="gruvbox"] .markdown-body h3 { color: #fabd2f; }
 [data-md-theme="gruvbox"] .markdown-body h1,
 [data-md-theme="gruvbox"] .markdown-body h2 { border-bottom-color: #3c3836; }
 [data-md-theme="gruvbox"] .markdown-body a { color: #83a598; }
-[data-md-theme="gruvbox"] .markdown-body code { background: #3c3836; color: #ebdbb2; }
+[data-md-theme="gruvbox"] .markdown-body code { background: #3c3836; color: #ffffff; }
 [data-md-theme="gruvbox"] .markdown-body pre { background: #32302f; border-color: #3c3836; }
-[data-md-theme="gruvbox"] .markdown-body pre code { color: #ebdbb2; }
-[data-md-theme="gruvbox"] .markdown-body blockquote { color: #a89984; border-left-color: #504945; background: rgba(235, 219, 178, .03); }
+[data-md-theme="gruvbox"] .markdown-body pre code { color: #ffffff; }
+[data-md-theme="gruvbox"] .markdown-body blockquote { color: #c8bfa0; border-left-color: #504945; background: rgba(235, 219, 178, .03); }
 [data-md-theme="gruvbox"] .markdown-body th { background: #3c3836; }
 [data-md-theme="gruvbox"] .markdown-body th,
 [data-md-theme="gruvbox"] .markdown-body td { border-color: #3c3836; }
 [data-md-theme="gruvbox"] .markdown-body hr { border-top-color: #3c3836; }
-[data-md-theme="gruvbox"] .markdown-body .hljs { color: #ebdbb2; }
+[data-md-theme="gruvbox"] .markdown-body .hljs { color: #ffffff; }
 [data-md-theme="gruvbox"] .markdown-body .hljs-comment,
 [data-md-theme="gruvbox"] .markdown-body .hljs-quote { color: #928374; font-style: italic; }
 [data-md-theme="gruvbox"] .markdown-body .hljs-keyword,
