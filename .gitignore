@@ -10,3 +10,6 @@ node_modules/
 
 # AI 工具本地上下文缓存（非代码，不入库）
 .ai/
+
+# 品牌图标重做前的原始文件备份（旧 JPEG 冒充 PNG 那批），仅本地留档回滚用
+icons/.backup-original/
