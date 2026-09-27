@@ -1511,6 +1511,13 @@ body.has-app-bg .editor-wrap.has-overlay #editor { background: transparent; }
 .bg-preview.has-img { color: transparent; }
 .bg-preview.has-img .bg-preview-empty { display: none; }
 .bg-file-btn { width: 100%; margin-top: 10px; }
+.bg-url-row { display: flex; gap: 8px; margin-top: 10px; }
+.bg-url-row input { flex: 1; min-width: 0; }
+.bg-url-row button {
+  flex: none; padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-elev); color: var(--text); font-size: 13px; cursor: pointer;
+}
+.bg-url-row button:hover { border-color: var(--accent); color: var(--accent); }
 .modal-box input[type="range"] {
   width: 100%; margin: 6px 0 2px; padding: 0; border: 0; background: transparent; accent-color: var(--accent);
 }

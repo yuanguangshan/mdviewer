@@ -195,7 +195,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v4.5</span>
+      <span class="version">v4.6</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -461,9 +461,13 @@
   <div class="modal" id="bgModal" hidden>
     <div class="modal-box" role="dialog" aria-modal="true" aria-label="设置背景图片">
       <div class="modal-title">🖼️ 设置背景图片</div>
-      <p class="modal-desc">上传一张本地图片作为整个编辑器的背景，仅保存在本机，不上传任何服务器。</p>
+      <p class="modal-desc">上传一张本地图片，或填一个图片链接作为整个编辑器的背景。本地图片仅保存在本机，不上传任何服务器。</p>
       <div class="bg-preview" id="bgPreview"><span class="bg-preview-empty">尚未设置背景</span></div>
       <button id="bgFileBtn" type="button" class="btn primary bg-file-btn">📁 上传图片</button>
+      <div class="bg-url-row">
+        <input id="bgUrl" type="url" placeholder="或粘贴图片链接 https://…" autocomplete="off" spellcheck="false" />
+        <button id="bgUrlApply" type="button">应用</button>
+      </div>
       <label for="bgScrim">遮罩浓度（越低越透，文字越淡）</label>
       <input id="bgScrim" type="range" min="0.3" max="0.95" step="0.05" value="0.7" />
       <label for="bgFit">填充方式</label>

@@ -2932,6 +2932,8 @@ if (aiModal) {
       if (f) uploadBgFile(f);
       e.target.value = '';                 // 允许重复选同一文件
     });
+    $('#bgUrlApply').addEventListener('click', () => applyBgUrl($('#bgUrl').value));
+    $('#bgUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyBgUrl(e.target.value); } });
     $('#bgScrim').addEventListener('input', (e) => setBgScrim(e.target.value));
     $('#bgFit').addEventListener('change', (e) => setBgFit(e.target.value));
     $('#bgRemove').addEventListener('click', () => { removeAppBg(); bgModal.hidden = true; });
@@ -4465,14 +4467,33 @@ async function gcOrphanImages({ silent = false } = {}) {
 
 // === SECTION: 全应用背景图（用户上传，本地 IndexedDB 存储，不上传服务器） ===
 // 作用范围：整个窗口，编辑区与预览区文字都浮在图上（两处各加主题色遮罩保证清晰）。
-// 存储：Blob 写入 images 仓库（key=BG_ID），CSS 变量 --bg-image/--bg-scrim/--bg-fit 控制呈现；
-// 遮罩浓度 / 填充方式等轻量设置存 localStorage['app-bg-settings']。
-let appBgUrl = null;   // 当前背景图 object URL（用于 revoke，避免内存泄漏）
+// 存储：本地图片 Blob 写入 images 仓库（key=BG_ID），远程链接只存 URL 字符串；
+// CSS 变量 --bg-image/--bg-scrim/--bg-fit 控制呈现；
+// 遮罩浓度 / 填充方式 / 远程链接等轻量设置存 localStorage['app-bg-settings']。
+// 两种来源互斥：后设置的生效（设置远程链接会清掉本地 Blob，反之清掉 url 字段）。
+let appBgSrc = null;        // 当前背景图来源：object URL（本地图片）或 http(s) 远程链接
+let appBgObjectUrl = null;  // 仅本地图片时为非空（即 object URL），用于 revoke 避免内存泄漏
 
 function readBgSettings() {
   try { return JSON.parse(localStorage.getItem('app-bg-settings') || '{}'); } catch (_) { return {}; }
 }
 function saveBgSettings(s) { localStorage.setItem('app-bg-settings', JSON.stringify(s)); }
+
+// 统一入口：切换当前背景来源并同步弹窗预览。objectUrl 省略/null 表示来源是远程链接。
+function setBgSrc(src, objectUrl) {
+  if (appBgObjectUrl && appBgObjectUrl !== objectUrl) URL.revokeObjectURL(appBgObjectUrl);
+  appBgObjectUrl = objectUrl || null;
+  appBgSrc = src;
+  applyAppBg(src, readBgSettings());
+  updateBgPreview();
+}
+
+function updateBgPreview() {
+  const preview = document.getElementById('bgPreview');
+  if (!preview) return;
+  if (appBgSrc) { preview.style.backgroundImage = 'url("' + appBgSrc + '")'; preview.classList.add('has-img'); }
+  else { preview.classList.remove('has-img'); preview.style.backgroundImage = ''; }
+}
 
 function applyAppBg(url, settings) {
   const el = document.getElementById('appBg');
@@ -4486,13 +4507,16 @@ function applyAppBg(url, settings) {
 }
 
 async function loadAppBg() {
+  const s = readBgSettings();
+  // 远程链接优先：url 存在即用它（与本地 Blob 互斥，后设置的生效）
+  if (s && s.url) { setBgSrc(s.url, null); return; }
   try {
     await openLibDb();
     if (!libDb) return;
     const rec = await idbGetImage(BG_ID);
     if (!rec || !rec.blob) return;
-    appBgUrl = URL.createObjectURL(rec.blob);
-    applyAppBg(appBgUrl, readBgSettings());
+    const ou = URL.createObjectURL(rec.blob);
+    setBgSrc(ou, ou);   // 本地 Blob：src 与 object URL 同源，登记以便后续 revoke
   } catch (e) { console.error('[bg] loadAppBg 失败', (e && e.message) || String(e)); }
 }
 
@@ -4503,17 +4527,29 @@ async function uploadBgFile(file) {
     await openLibDb();
     if (!libDb) { flash('本地存储不可用'); return; }
     await idbPutImage({ id: BG_ID, blob: file, name: file.name, ts: Date.now() });
-    if (appBgUrl) URL.revokeObjectURL(appBgUrl);
-    appBgUrl = URL.createObjectURL(file);
-    applyAppBg(appBgUrl, readBgSettings());
+    const s = readBgSettings(); delete s.url; saveBgSettings(s);   // 与远程链接互斥
+    const ou = URL.createObjectURL(file);
+    setBgSrc(ou, ou);
+    const urlEl = document.getElementById('bgUrl'); if (urlEl) urlEl.value = '';
     flash('背景图片已应用');
-    // 同步刷新弹窗预览
-    const preview = document.getElementById('bgPreview');
-    if (preview) { preview.style.backgroundImage = 'url("' + appBgUrl + '")'; preview.classList.add('has-img'); }
   } catch (e) {
     console.error('[bg] 保存失败', e);
     flash('背景图片保存失败');
   }
+}
+
+// 远程链接：仅做基本校验（http/https），不预加载——加载失败由 CSS 静默降级为纯色底。
+function applyBgUrl(rawUrl) {
+  const u = (rawUrl || '').trim();
+  if (!u) { flash('请先填写图片链接'); return; }
+  let parsed;
+  try { parsed = new URL(u, location.href); } catch (_) { flash('链接格式不正确'); return; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') { flash('仅支持 http/https 图片链接'); return; }
+  const s = readBgSettings(); s.url = parsed.href; saveBgSettings(s);
+  // 与本地 Blob 互斥：清掉已存的本地图片，避免下次启动被覆盖
+  openLibDb().then(() => { if (libDb) return idbDeleteImage(BG_ID); }).catch(() => {});
+  setBgSrc(parsed.href, null);
+  flash('背景图片已应用');
 }
 
 async function removeAppBg() {
@@ -4527,20 +4563,21 @@ async function removeAppBg() {
   el.style.removeProperty('--bg-image');
   el.style.removeProperty('--bg-scrim');
   el.style.removeProperty('--bg-fit');
-  if (appBgUrl) { URL.revokeObjectURL(appBgUrl); appBgUrl = null; }
+  if (appBgObjectUrl) { URL.revokeObjectURL(appBgObjectUrl); appBgObjectUrl = null; }
+  appBgSrc = null;
   localStorage.removeItem('app-bg-settings');
-  const preview = document.getElementById('bgPreview');
-  if (preview) { preview.classList.remove('has-img'); preview.style.backgroundImage = ''; }
+  updateBgPreview();
+  const urlEl = document.getElementById('bgUrl'); if (urlEl) urlEl.value = '';
   flash('已移除背景图片');
 }
 
 function openBgDialog() {
   const dlg = document.getElementById('bgModal');
-  const preview = document.getElementById('bgPreview');
-  if (!dlg || !preview) return;
-  if (appBgUrl) { preview.style.backgroundImage = 'url("' + appBgUrl + '")'; preview.classList.add('has-img'); }
-  else { preview.classList.remove('has-img'); preview.style.backgroundImage = ''; }
+  if (!dlg) return;
+  updateBgPreview();
   const s = readBgSettings();
+  const urlEl = document.getElementById('bgUrl');
+  if (urlEl) urlEl.value = s.url || '';
   const scrimEl = document.getElementById('bgScrim');
   const fitEl = document.getElementById('bgFit');
   if (scrimEl) scrimEl.value = (s.scrim != null) ? s.scrim : 0.7;
