@@ -22,6 +22,7 @@ const readingProgress = $('#readingProgress');
 //   DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用）
 //   主题：auto / light / dark，auto 跟随系统
 //   预览主题：github / onedark / solarized / nord（独立于 app 主题）
+//   正文外观：字号 / 字色（仅预览，本机持久化）
 //   渲染 + 代码高亮
 //   KaTeX 数学公式（按需懒加载，与 mermaid 同策略）
 //   锚点同步滚动辅助
@@ -439,6 +440,108 @@ function applyMdTheme(mode) {
     const base = b.dataset.label || MD_THEME_LABEL[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : '');
     b.textContent = (key === mode ? '✓ ' : '') + base;
   });
+}
+
+// === SECTION: 正文外观：字号 / 字色（仅预览，持久化到本机） ===
+// 设计：直接给 #preview 写内联样式，天然压过预览主题里 [data-md-theme] .markdown-body
+// 的颜色规则；标题 / 链接 / 代码块等自带配色的元素不受影响，只改「正文」。
+const TEXT_STYLE_KEY = 'md-text-style';
+const TS_SIZE_MIN = 12, TS_SIZE_MAX = 32, TS_SIZE_DEFAULT = 16;
+
+// 归一化颜色：仅接受 #rgb / #rrggbb，统一转小写 6 位；其余（含空串）视为「跟随主题」。
+function normalizeTextColor(v) {
+  if (typeof v !== 'string') return '';
+  let s = v.trim();
+  if (/^#[0-9a-f]{3}$/i.test(s)) s = '#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  return /^#[0-9a-f]{6}$/i.test(s) ? s.toLowerCase() : '';
+}
+
+function readTextStyle() {
+  const def = { size: TS_SIZE_DEFAULT, color: '' };
+  try {
+    const raw = JSON.parse(localStorage.getItem(TEXT_STYLE_KEY) || '{}');
+    const n = Math.round(Number(raw.size));
+    if (Number.isFinite(n)) def.size = Math.min(TS_SIZE_MAX, Math.max(TS_SIZE_MIN, n));
+    def.color = normalizeTextColor(raw.color);
+  } catch (_) {}
+  return def;
+}
+
+function saveTextStyle(style) {
+  try { localStorage.setItem(TEXT_STYLE_KEY, JSON.stringify({ size: style.size, color: style.color })); } catch (_) {}
+}
+
+// 取当前预览主题的正文色（用于「跟随主题」时让取色器显示一个合理的初始值）
+function previewThemeColorHex() {
+  if (!preview) return '#1f2328';
+  const parts = (getComputedStyle(preview).color || '').match(/\d+(?:\.\d+)?/g);
+  if (!parts || parts.length < 3) return '#1f2328';
+  return '#' + parts.slice(0, 3).map((n) => {
+    const v = Math.max(0, Math.min(255, Math.round(Number(n))));
+    return v.toString(16).padStart(2, '0');
+  }).join('');
+}
+
+// 同步弹窗控件状态（字号显示 / 预设高亮 / 取色器与色块）
+function syncTextStyleUI(style) {
+  const sizeEl = document.getElementById('tsSize');
+  const valEl = document.getElementById('tsSizeVal');
+  if (sizeEl) sizeEl.value = String(style.size);
+  if (valEl) valEl.textContent = style.size + ' px';
+  document.querySelectorAll('#tsSizePresets [data-size]').forEach((b) => {
+    b.classList.toggle('active', Number(b.dataset.size) === style.size);
+  });
+  const colorEl = document.getElementById('tsColor');
+  if (colorEl) colorEl.value = style.color || previewThemeColorHex();
+  document.querySelectorAll('#tsSwatches [data-color]').forEach((b) => {
+    b.classList.toggle('active', normalizeTextColor(b.dataset.color) === style.color);
+  });
+  const resetBtn = document.getElementById('tsColorReset');
+  if (resetBtn) resetBtn.classList.toggle('active', !style.color);
+}
+
+// 应用样式到预览正文（并在弹窗打开时同步其中示例）
+function applyTextStyle(style) {
+  style = style || readTextStyle();
+  const size = style.size + 'px';
+  if (preview) {
+    preview.style.fontSize = size;
+    if (style.color) preview.style.setProperty('--md-text-color', style.color);
+    else preview.style.removeProperty('--md-text-color');
+  }
+  const box = document.getElementById('tsPreview');
+  if (box) {
+    box.style.fontSize = size;
+    if (style.color) box.style.setProperty('color', style.color);
+    else box.style.removeProperty('color');
+  }
+  syncTextStyleUI(style);
+}
+
+// 局部更新（只传要改的字段）
+function updateTextStyle(patch) {
+  const cur = readTextStyle();
+  const next = { size: cur.size, color: cur.color };
+  if (patch.size !== undefined && patch.size !== null) {
+    const n = Math.round(Number(patch.size));
+    if (Number.isFinite(n)) next.size = Math.min(TS_SIZE_MAX, Math.max(TS_SIZE_MIN, n));
+  }
+  if (patch.color !== undefined) next.color = normalizeTextColor(patch.color);
+  saveTextStyle(next);
+  applyTextStyle(next);
+}
+
+function resetTextStyle() {
+  try { localStorage.removeItem(TEXT_STYLE_KEY); } catch (_) {}
+  applyTextStyle({ size: TS_SIZE_DEFAULT, color: '' });
+  flash('已恢复默认正文样式');
+}
+
+function openTextStyleDialog() {
+  const m = document.getElementById('textStyleModal');
+  if (!m) return;
+  applyTextStyle(readTextStyle());
+  m.hidden = false;
 }
 
 // === SECTION: 渲染 + 代码高亮 ===
@@ -1639,6 +1742,19 @@ function getMdThemeCss(theme) {
 // 预览主题中的深色配色（背景接近黑）；其余为浅色。仅用于导出时给页面外缘补深色底。
 const MD_THEME_DARK = new Set(['onedark', 'nord', 'gruvbox', 'dracula', 'monokai']);
 
+// 导出时沿用当前正文外观，使分享出去的 HTML 与预览一致
+function exportTextStyleCss() {
+  return 'font-size:' + readTextStyle().size + 'px;';
+}
+
+function exportTextColorCss() {
+  const color = readTextStyle().color;
+  if (!color) return '';
+  return 'body.markdown-body p,body.markdown-body li,body.markdown-body td,body.markdown-body th,'
+    + 'body.markdown-body dd,body.markdown-body dt{color:' + color + '}'
+    + 'body.markdown-body blockquote p{color:inherit}';
+}
+
 async function exportHTML() {
   // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
   const html = await inlineLibImages(lastSanitizedHtml || preview.innerHTML);
@@ -1661,7 +1777,9 @@ async function exportHTML() {
     + EXPORT_CSS
     + darkBgRule
     + (themeCss ? ('\n' + themeCss) : '')
-    + '</style></head><body class="markdown-body" data-md-theme="' + mdTheme + '">'
+    + exportTextColorCss()
+    + '</style></head><body class="markdown-body" data-md-theme="' + mdTheme + '"'
+    + ' style="' + exportTextStyleCss() + '">'
     + html + '</body></html>';
   download(currentName.replace(/\.(md|markdown|txt)$/i, '') + '.html', doc, 'text/html;charset=utf-8');
   flash('已导出 HTML' + (themeCss ? '（' + mdTheme + ' 主题）' : ''));
@@ -2941,6 +3059,34 @@ if (aiModal) {
     bgModal.addEventListener('click', (e) => { if (e.target === bgModal) bgModal.hidden = true; });
     bgModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') bgModal.hidden = true; });
   }
+  // 正文字号与颜色弹窗：拖动即时预览，选择即保存
+  const tsModal = document.getElementById('textStyleModal');
+  if (tsModal) {
+    const tsSize = document.getElementById('tsSize');
+    if (tsSize) tsSize.addEventListener('input', () => updateTextStyle({ size: tsSize.value }));
+    const tsPresets = document.getElementById('tsSizePresets');
+    if (tsPresets) tsPresets.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-size]');
+      if (b) updateTextStyle({ size: b.dataset.size });
+    });
+    const tsColor = document.getElementById('tsColor');
+    if (tsColor) tsColor.addEventListener('input', () => updateTextStyle({ color: tsColor.value }));
+    const tsColorReset = document.getElementById('tsColorReset');
+    if (tsColorReset) tsColorReset.addEventListener('click', () => updateTextStyle({ color: '' }));
+    const tsSwatches = document.getElementById('tsSwatches');
+    if (tsSwatches) tsSwatches.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-color]');
+      if (b) updateTextStyle({ color: b.dataset.color });
+    });
+    const tsReset = document.getElementById('tsReset');
+    if (tsReset) tsReset.addEventListener('click', resetTextStyle);
+    const tsDone = document.getElementById('tsDone');
+    if (tsDone) tsDone.addEventListener('click', () => { tsModal.hidden = true; });
+    tsModal.addEventListener('click', (e) => { if (e.target === tsModal) tsModal.hidden = true; });
+    tsModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') tsModal.hidden = true; });
+    // 菜单触发后焦点仍在工具栏按钮上，故再挂一个全局 Esc（弹窗内部 Esc 也覆盖）
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !tsModal.hidden) tsModal.hidden = true; });
+  }
   // 自定义格式刷弹窗
   const fbCustModal = document.getElementById('fbCustomizeModal');
   if (fbCustModal) {
@@ -3304,6 +3450,7 @@ const QUICK_CATALOG = [
   { id: 'copymd', label: '📋 复制Markdown', kind: 'act', act: 'copymd', group: 'export' },
   { id: 'copy', label: '📋 复制 html', kind: 'act', act: 'copy', group: 'export' },
   { id: 'theme', label: '🌗 切换深/浅/跟随', kind: 'act', act: 'theme', group: 'look' },
+  { id: 'textStyle', label: '🔠 正文字号与颜色', kind: 'act', act: 'textStyle', group: 'look' },
   { id: 'fmtBold', label: '🅱 加粗', kind: 'action', act: 'fmtBold', group: 'fmt' },
   { id: 'fmtItalic', label: '🇮 斜体', kind: 'action', act: 'fmtItalic', group: 'fmt' },
   { id: 'fmtCode', label: '⌨️ 行内代码', kind: 'action', act: 'fmtCode', group: 'fmt' },
@@ -3829,6 +3976,7 @@ function handleDataAct(act, btn) {
   else if (act === 'wrap') { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }
   else if (act === 'theme') applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3]);
   else if (act === 'mdtheme') applyMdTheme(btn.dataset.val);
+  else if (act === 'textStyle') openTextStyleDialog();
   else if (act === 'vim') toggleVimMode();
   else if (act === 'share-r2') shareViaR2();
   else if (act === 'layout-swap') toggleLayoutSwap();
@@ -5173,6 +5321,7 @@ applyWrap();            // 设置换行模式（默认软换行）+ 渲染覆盖
 applyLayout();          // 应用上次保存的左右布局与分隔宽度
 initSplitter();         // 启用编辑区 / 预览区分隔线拖拽
 applyMdTheme(mdThemeMode);
+applyTextStyle(readTextStyle());   // 还原用户设置的预览正文字号 / 字色
 updateStats();
 updateGutter();
 updatePos();

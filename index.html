@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./styles.css?v=4.4" />
+  <link rel="stylesheet" href="./styles.css?v=4.7" />
   <!-- 防 FOUC：在 body 出现前尽早按「本地偏好 → 系统主题」着色 -->
   <script>
     (function () {
@@ -69,6 +69,7 @@
             <button role="menuitem" data-act="nas-download">📥 从 NAS 下载</button>
             <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
             <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题设置 ▸</button>
+            <button role="menuitem" data-act="textStyle" title="调整右侧预览正文的字号与颜色">🔠 正文字号与颜色…</button>
             <div class="menu-sep"></div>
 
             <!-- 文档操作 -->
@@ -195,7 +196,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v4.6</span>
+      <span class="version">v4.7</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -483,6 +484,47 @@
     </div>
   </div>
   <input type="file" id="bgFileInput" accept="image/*" hidden />
+
+  <!-- 正文字号与颜色弹窗：仅影响预览正文，不改 Markdown 源文件 -->
+  <div class="modal" id="textStyleModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="正文字号与颜色">
+      <div class="modal-title">🔠 正文字号与颜色</div>
+      <p class="modal-desc">仅影响右侧预览的正文排版，不会修改 Markdown 源文件；设置保存在本机。标题、链接与代码块保留当前主题配色。</p>
+      <div class="ts-preview" id="tsPreview">
+        <div class="ts-preview-label">实时预览</div>
+        <p>雨轩编辑器让 Markdown 写作更顺手：<strong>加粗</strong>、<em>斜体</em>、<code>行内代码</code>与<span class="ts-link">链接</span>都能保持清晰。</p>
+      </div>
+      <div class="ts-head"><label for="tsSize">字号</label><span class="ts-size-val" id="tsSizeVal">16 px</span></div>
+      <input type="range" id="tsSize" min="12" max="32" step="1" value="16" aria-label="正文字号" />
+      <div class="ts-presets" id="tsSizePresets">
+        <button type="button" data-size="14">小 14</button>
+        <button type="button" data-size="16">标准 16</button>
+        <button type="button" data-size="18">大 18</button>
+        <button type="button" data-size="20">特大 20</button>
+        <button type="button" data-size="24">超大 24</button>
+      </div>
+      <div class="ts-head"><label for="tsColor">字体颜色</label></div>
+      <div class="ts-color-row">
+        <input type="color" id="tsColor" value="#1f2328" aria-label="正文字体颜色" />
+        <button type="button" id="tsColorReset" class="ts-ghost">跟随主题</button>
+      </div>
+      <div class="ts-swatches" id="tsSwatches" role="group" aria-label="常用字色">
+        <button type="button" data-color="" class="ts-default" title="跟随当前预览主题">默认</button>
+        <button type="button" data-color="#1f2328" style="background:#1f2328" title="墨黑"></button>
+        <button type="button" data-color="#4b5563" style="background:#4b5563" title="深灰"></button>
+        <button type="button" data-color="#f8fafc" style="background:#f8fafc" title="雪白"></button>
+        <button type="button" data-color="#dc2626" style="background:#dc2626" title="红"></button>
+        <button type="button" data-color="#ea580c" style="background:#ea580c" title="橙"></button>
+        <button type="button" data-color="#16a34a" style="background:#16a34a" title="绿"></button>
+        <button type="button" data-color="#2563eb" style="background:#2563eb" title="蓝"></button>
+        <button type="button" data-color="#7c3aed" style="background:#7c3aed" title="紫"></button>
+      </div>
+      <div class="modal-actions">
+        <button id="tsReset" type="button">恢复默认</button>
+        <button id="tsDone" type="button" class="primary">完成</button>
+      </div>
+    </div>
+  </div>
 
   <script defer src="./app.js"></script>
 </body>

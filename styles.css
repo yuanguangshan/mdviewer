@@ -1525,3 +1525,72 @@ body.has-app-bg .editor-wrap.has-overlay #editor { background: transparent; }
   width: 100%; box-sizing: border-box; padding: 9px 11px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--bg-elev); color: var(--text); font-size: 13px;
 }
+
+/* ---------- 正文字号与颜色弹窗 ---------- */
+.ts-preview {
+  margin-top: 10px; padding: 12px 14px;
+  border: 1px dashed var(--border); border-radius: 10px;
+  background: var(--bg-soft); line-height: 1.75; overflow-wrap: anywhere;
+}
+.ts-preview-label {
+  margin-bottom: 4px; font-size: 11px; font-weight: 700;
+  letter-spacing: .4px; color: var(--text-dim);
+}
+.ts-preview p { margin: .2em 0; }
+.ts-preview code {
+  padding: .15em .4em; border-radius: 5px;
+  background: var(--code-bg); font-family: var(--mono); font-size: .9em;
+}
+.ts-preview .ts-link {
+  color: var(--accent-soft); text-decoration: underline; text-underline-offset: 2px;
+}
+.ts-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-top: 14px;
+}
+.modal-box .ts-head label { margin: 0; }
+.ts-size-val {
+  color: var(--accent-soft); font-family: var(--mono);
+  font-size: 12px; font-weight: 600;
+}
+.ts-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ts-presets button, .ts-ghost {
+  padding: 5px 9px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text-soft); font-size: 12px;
+}
+.ts-presets button:hover, .ts-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.ts-presets button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ts-color-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.modal-box .ts-color-row input[type="color"] {
+  flex: none; width: 46px; height: 34px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); cursor: pointer;
+}
+.ts-swatches {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 10px;
+}
+.ts-swatches button {
+  width: 24px; height: 24px; padding: 0; border-radius: 50%;
+  border: 2px solid var(--border); background: var(--bg); cursor: pointer;
+  transition: transform .12s, border-color .12s;
+}
+.ts-swatches button:hover { transform: scale(1.1); }
+.ts-swatches button.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ts-swatches button.ts-default {
+  width: auto; height: 28px; padding: 0 10px; border-radius: 8px;
+  color: var(--text-soft); font-size: 12px;
+}
+
+.ts-ghost.active { border-color: var(--accent); color: var(--accent); }
+
+/* 自定义正文颜色：只作用于正文元素，标题 / 链接 / 代码块保留主题配色 */
+.preview.markdown-body p,
+.preview.markdown-body li,
+.preview.markdown-body td,
+.preview.markdown-body th,
+.preview.markdown-body dd,
+.preview.markdown-body dt { color: var(--md-text-color, inherit); }
+/* 引用块保持主题的弱化配色（自定义正文色不覆盖引用） */
+.preview.markdown-body blockquote p { color: inherit; }
