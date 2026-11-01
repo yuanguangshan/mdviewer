@@ -251,7 +251,8 @@ launchctl kickstart -k gui/$(id -u)/com.yuangs.workspace-serve
 
 | 限制 | 影响 | 计划 |
 |---|---|---|
-| `.md` 按纯文本显示 | 表格/代码块不渲染，当文档读很难受 | 加 `marked` + `DOMPurify` 渲染，保留 `?raw=1` / `?download=1` |
+| `.md` 按纯文本显示 | 表格/代码块不渲染，当文档读很难受 | ✅ **已解决（v4.9.1）**：不需要引入 `marked`/`DOMPurify`，改为复用 mdviewer 自身的渲染管线——目录列表 `.md` 行新增「📖 阅读」→ `/mdviewer/index.html?open=<同源路径>`。详见 `docs/2026-11-01-v4.9.1-外部文档浏览.md`；直链（`text/markdown`）保留为 raw 视图 |
+| `/root/serve-web.js` 只在沙箱 | 容器重建后文件丢失 → Mac 端 `exec node /root/serve-web.js` 整条失效（静默） | ✅ **已解决（v4.9.1）**：副本入仓 `ops/`，权威副本 `/workspace/ops/serve-web.js`（持久区 + 随备份上 NAS），`watchdog.sh` 4c 段启动时自动回填 |
 | 无鉴权 | 仅限 WireGuard 内网可接受；上公网必须加锁 | 已支持 `SERVE_PASS`，配合 `cloudflared` 前先设密码 |
 | LaunchAgent 需登录会话 | 锁屏可以，注销/重启未登录则不起 | 需要时改 LaunchDaemon（`/Library/LaunchDaemons` + sudo） |
 | 依赖沙箱存活 | 容器重建后脚本需重推（已备份，一条命令） | 可加重试提示；或在 plist 里前置一次自动 scp |

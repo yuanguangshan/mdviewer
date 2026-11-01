@@ -27,6 +27,7 @@
 
 ### 2. 📁 本地优先的文件与草稿管理
 * **原生文件读写**：基于现代 Web API (`File System Access API`)，可直接打开本地 `.md` 文件并执行**原地保存（Ctrl+S）** [app.js]。
+* **外部文档浏览（`?open=`）**：同源部署时（例如配套 `serve-web.js` 提供容器目录），可用 `/mdviewer/index.html?open=/path/to/x.md` 直接以排版阅读一个既有 `.md`——不写入文库、不占用索引库，`Ctrl/Cmd+S` 才会另存；跨源地址会被拒绝（外部内容请走 `?share_r2=` 分享链路）。详见 `docs/2026-11-01-v4.9.1-外部文档浏览.md`。
 * **安全草稿箱**：内置防丢失机制，通过 `localStorage` 实时静默保存未提交的草稿，意外关闭网页也不怕 [app.js]。
 * **丰富导出能力**：支持一键复制 HTML、导出 `.html` 文件，或者直接**一键打印/导出为精美 PDF** [app.js]。
 
@@ -109,7 +110,7 @@ print(calculate_words("Hello Markdown!"))
 | 纯函数内核 | `lib/md-core.js` | 标题 slug / 行偏移 / 字数 / 章节解析 / 博客元数据 / AI SSE 解析 / 正则安全 / ZIP 读写。**不碰 DOM**，浏览器挂 `window.MdCore`，Node 里 `require` 即可 |
 | 正则线程 | `lib/md-regex-worker.js` | 用户输入的正则放进 Worker 跑，超时直接 `terminate()`——ReDoS 只会中断，不会冻住页面 |
 | 分享接口闸门 | `lib/share-guard.mjs` | 只收 `text/markdown`、拒绝 `Content-Encoding`、2MB 上限、id 格式校验，挡掉扫描器与攻击载荷（见 `docs/2026-11-01-分享接口加固-runbook.md`） |
-| 单元/集成测试 | `tests/*.test.js` | `node --test`，**64 个用例**：md-core 纯逻辑 + 分享接口写入闸门 + Worker 集成（假 R2 桶真跑 handler） |
+| 单元/集成测试 | `tests/*.test.js` | `node --test`，**67 个用例**：md-core 纯逻辑 + 分享接口写入闸门 + Worker 集成（假 R2 桶真跑 handler） |
 | 端到端测试 | `tests/e2e_smoke.py` | Playwright + 真 Chromium，33 项断言：渲染、同名标题去重、撤销栈、ReDoS 中断、文库持久化、历史快照策略、zip 备份往返、弹窗焦点陷阱、菜单方向键、控制台零报错 |
 | 版本一致性 | `scripts/sync-version.mjs` / `scripts/check-version.mjs` | 版本号单一来源（`VERSION`），脚本同步 + CI 校验 + SW 预缓存清单覆盖率检查 |
 
