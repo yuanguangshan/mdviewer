@@ -5426,7 +5426,51 @@ function fallbackCopy(txt) {
   }
 }
 
+/* ---------- 外部文档浏览（?open=/path/x.md） ----------
+ * 用途：mdviewer 也可以由容器内的 serve-web.js 提供，目录列表里点 .md 直接以排版阅读，
+ *      比 text/markdown 的纯文本体验好；因为是同源，所以不涉及 CORS / mixed content。
+ * 安全：只允许同源路径，绝不 fetch 任意外部地址（外部文档请走 ?share_r2=）。
+ * 返回 true 表示已消费该参数（不再落入文库/草稿初始化）。
+ */
+async function openExternalDocFromQuery() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get('open'); } catch (_) { return false; }
+  if (!raw) return false;
+  let target;
+  try { target = new URL(raw, location.href); } catch (_) { return false; }
+  if (target.origin !== location.origin) {
+    toast('❌ ?open= 只支持打开同源路径下的 Markdown', 'err');
+    return true;
+  }
+  toast('正在加载文档…', 'info');
+  try {
+    const resp = await fetch(target.href, { cache: 'no-store' });
+    if (!resp.ok) {
+      toast(`❌ 打不开该文档（HTTP ${resp.status}）`, 'err');
+      return false;          // 回退到文库/草稿，别把用户卡在空页面
+    }
+    editor.value = await resp.text();
+    currentLibId = null;
+    currentShareId = null;   // 外部文档不是协作文档，避免「生成协作链接」误覆盖别人的分享
+    let base = target.pathname.split('/').pop() || 'document.md';
+    try { base = decodeURIComponent(base); } catch (_) {}
+    currentName = base;
+    currentNameIsAuto = false;
+    updateFileName();
+    afterChange({ skipWriteback: true });
+    syncPodcastOnLoad();
+    toast('📖 已以浏览模式载入外部文档（要保存副本请 Ctrl/Cmd+S 另存）', 'ok', 5000);
+    return true;
+  } catch (e) {
+    toast('❌ 文档加载失败：' + (e.message || e), 'err');
+    return false;
+  }
+}
+
 async function initLibrary() {
+  // === 外部文档浏览入口：命中 ?open=<同源路径> 时直接载入（配合 serve-web.js 的目录列表）===
+  if (await openExternalDocFromQuery()) return;
+
   // === 协作分享入口：命中 ?share_r2=xxx.md 时从 R2 拉取并进入协作模式 ===
   try {
     const shareId = new URLSearchParams(window.location.search).get('share_r2');

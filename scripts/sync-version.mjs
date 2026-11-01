@@ -34,7 +34,7 @@ const edits = [
   // index.html：meta + 页脚 + styles.css?v
   ['index.html', /<meta name="app-version" content="[\d.]+" \/>/, `<meta name="app-version" content="${short}" />`],
   ['index.html', /<span class="version">v[\d.]+<\/span>/, `<span class="version">v${short}</span>`],
-  ['index.html', /href="\.\/styles\.css\?v=[\d.]+"/, `href="./styles.css?v=${version}"`],
+  ['index.html', /href="\.\/styles\.css\?v=[\d.]+"/, `href="./styles.css?v=${short}"`],   // 与 check-version 一致：资源指纹用短版
   // app.js：APP_VERSION 常量（运行时与 meta 自检）
   ['app.js', /const APP_VERSION = '[\d.]+';/, `const APP_VERSION = '${short}';`],
 ];
