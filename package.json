@@ -1,13 +1,13 @@
 {
   "name": "mdviewer",
-  "version": "4.8.0",
+  "version": "4.9.0",
   "private": true,
   "description": "雨轩编辑器 mdviewer —— 本地优先、离线可用的 PWA Markdown 写作工具（零构建、零运行时依赖）",
   "license": "MIT",
   "scripts": {
     "test": "node --test \"tests/*.test.js\"",
     "test:watch": "node --test --watch \"tests/*.test.js\"",
-    "check": "npm run test && node scripts/check-version.mjs && node --check app.js && node --check sw.js && node --check lib/md-core.js && node --check lib/md-regex-worker.js",
+    "check": "npm run test && node scripts/check-version.mjs && node --check app.js && node --check sw.js && node --check lib/md-core.js && node --check lib/md-regex-worker.js && node scripts/check-worker.mjs",
     "release": "node scripts/sync-version.mjs"
   },
   "devDependencies": {}

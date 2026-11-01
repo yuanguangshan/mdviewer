@@ -108,7 +108,8 @@ print(calculate_words("Hello Markdown!"))
 |---|---|---|
 | 纯函数内核 | `lib/md-core.js` | 标题 slug / 行偏移 / 字数 / 章节解析 / 博客元数据 / AI SSE 解析 / 正则安全 / ZIP 读写。**不碰 DOM**，浏览器挂 `window.MdCore`，Node 里 `require` 即可 |
 | 正则线程 | `lib/md-regex-worker.js` | 用户输入的正则放进 Worker 跑，超时直接 `terminate()`——ReDoS 只会中断，不会冻住页面 |
-| 单元测试 | `tests/*.test.js` | `node --test`，37 个用例，覆盖上面全部逻辑 + 历史缺陷回归 |
+| 分享接口闸门 | `lib/share-guard.mjs` | 只收 `text/markdown`、拒绝 `Content-Encoding`、1MB 上限、id 格式校验，挡掉扫描器与攻击载荷（见 `docs/2026-11-01-分享接口加固-runbook.md`） |
+| 单元/集成测试 | `tests/*.test.js` | `node --test`，**64 个用例**：md-core 纯逻辑 + 分享接口写入闸门 + Worker 集成（假 R2 桶真跑 handler） |
 | 端到端测试 | `tests/e2e_smoke.py` | Playwright + 真 Chromium，33 项断言：渲染、同名标题去重、撤销栈、ReDoS 中断、文库持久化、历史快照策略、zip 备份往返、弹窗焦点陷阱、菜单方向键、控制台零报错 |
 | 版本一致性 | `scripts/sync-version.mjs` / `scripts/check-version.mjs` | 版本号单一来源（`VERSION`），脚本同步 + CI 校验 + SW 预缓存清单覆盖率检查 |
 

@@ -113,7 +113,7 @@ const {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.8';
+const APP_VERSION = '4.9';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -5366,7 +5366,9 @@ async function shareViaR2() {
   try {
     const resp = await fetch(url, {
       method,
-      headers: { 'Content-Type': 'text/markdown;charset=utf-8' },
+      // X-Mdviewer 是写入端点的「降噪」标记：Worker 侧据此挡掉无脑扫描器（返回 403）。
+      // 加了自定义头会让跨域请求先发 OPTIONS 预检，Worker 的 CORS 已放行该头。
+      headers: { 'Content-Type': 'text/markdown;charset=utf-8', 'X-Mdviewer': '1' },
       body: new Blob([editor.value], { type: 'text/markdown' })
     });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
