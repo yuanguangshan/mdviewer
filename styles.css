@@ -1594,3 +1594,46 @@ body.has-app-bg .editor-wrap.has-overlay #editor { background: transparent; }
 .preview.markdown-body dt { color: var(--md-text-color, inherit); }
 /* 引用块保持主题的弱化配色（自定义正文色不覆盖引用） */
 .preview.markdown-body blockquote p { color: inherit; }
+
+/* ============================================================
+ * 可访问性增强（v4.8）
+ * ============================================================ */
+
+/* 1) 尊重「减少动态效果」系统偏好：关掉过渡/动画，但保留必要的状态变化 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* 抽屉/弹窗仍要能立刻出现，只是不做位移动画 */
+  .lib-drawer, .toc-drawer, .modal, .toast { transition: none !important; }
+}
+
+/* 2) 键盘焦点可见：只在键盘导航时描边，鼠标点击不出现「难看的框」 */
+.btn:focus-visible,
+button:focus-visible,
+[role="menuitem"]:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* 编辑器本身保持原生焦点样式（避免和覆盖层高亮打架） */
+#editor:focus-visible { outline: none; }
+
+/* 3) 弹窗焦点落到容器时不要出现描边 */
+.modal-box:focus, .modal-box:focus-visible { outline: none; }
+
+/* 4) 长列表渲染优化：文库条目离屏时不参与布局/绘制（文档上千篇时滚动更稳） */
+.lib-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}

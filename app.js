@@ -84,7 +84,114 @@ function debounce(fn, ms) {
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
+// === SECTION: 纯函数内核（lib/md-core.js，可在 Node 里单测） ===
+// 约定：凡是「不碰 DOM 的算法」一律放内核，UI 层只做取值 / 渲染 / 反馈。
+// 这样同一份逻辑既能在浏览器跑，也能 `node --test` 直接测，不再靠手测覆盖。
+const Core = window.MdCore;
+if (!Core) {
+  // 内核加载失败（缓存缺文件 / 部署不完整）必须立刻暴露，不能静默降级成半残应用
+  document.body.insertAdjacentHTML('afterbegin',
+    '<div style="padding:20px;font:14px/1.7 system-ui;color:#e06c75;background:#1b1e24">' +
+    '⚠️ 核心模块 lib/md-core.js 加载失败，编辑器无法启动。请强制刷新（Ctrl+Shift+R）后重试。</div>');
+  throw new Error('MdCore 未加载：lib/md-core.js');
+}
+
+const {
+  escapeHtml, normalizeTextColor, humanBytes, compareVersion, stripInlineMd,
+  slugify, createSlugger, buildHeadingLineMap,
+  lineOffsets, posToLineCol,
+  countWords,
+  MAX_PATTERN_LEN, validatePattern, safeMatchCount, runRegexJob,
+  processReplacement, evaluateMatchReplacement,
+  formatSpacing: formatSpacingText,
+  parseSseLine, parseAiContent,
+  cnChapterNum, parseChapterList, writtenChapterNums, cnSmall, parseCountValue, parseWordCount,
+  BLOG_TITLE_MAX_LEN, blogSmartCut, parseBlogMeta, blogMdToPlain,
+  shouldSnapshot,
+  zipStore, unzipStore,
+} = Core;
+
+// 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
+// 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
+const APP_VERSION = '4.8';
+
+// 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
+// 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
+(function verifyVersion() {
+  const meta = document.querySelector('meta[name="app-version"]');
+  const pageVer = meta && meta.getAttribute('content');
+  if (!pageVer) return;
+  if (compareVersion(pageVer, APP_VERSION) !== 0) {
+    console.warn('[mdviewer] 版本不一致：页面 ' + pageVer + ' / 脚本 ' + APP_VERSION);
+    setTimeout(() => {
+      toast('⚠️ 检测到新旧混合缓存（页面 ' + pageVer + ' / 脚本 ' + APP_VERSION + '），请按 Ctrl+Shift+R 强制刷新', 'warn', 8000);
+    }, 1500);
+  }
+})();
+
+// === SECTION: 正则任务执行（Worker + 硬超时，防 ReDoS 冻死页面） ===
+// 浏览器正则无法在 exec() 中途被打断，只能整体放到 Worker 里跑，超时即 terminate()。
+let _regexWorker = null;
+let _regexSeq = 0;
+const _regexPending = new Map();
+
+function getRegexWorker() {
+  if (_regexWorker) return _regexWorker;
+  if (typeof Worker === 'undefined') return null;
+  try {
+    _regexWorker = new Worker('./lib/md-regex-worker.js');
+  } catch (_) {
+    return null;
+  }
+  _regexWorker.onmessage = (e) => {
+    const msg = e.data || {};
+    const p = _regexPending.get(msg.id);
+    if (!p) return;
+    _regexPending.delete(msg.id);
+    clearTimeout(p.timer);
+    if (msg.ok) p.resolve(msg.out);
+    else { const err = new Error(msg.error || '正则执行失败'); err.code = msg.code; p.reject(err); }
+  };
+  _regexWorker.onerror = () => { killRegexWorker(); };
+  return _regexWorker;
+}
+
+function killRegexWorker() {
+  if (_regexWorker) { try { _regexWorker.terminate(); } catch (_) {} }
+  _regexWorker = null;
+  _regexPending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error('超时')); });
+  _regexPending.clear();
+}
+
+/**
+ * 在 Worker 中跑一个正则任务；超时/不可用则降级为同步执行。
+ * @returns {Promise<object>}
+ */
+function runRegex(job, timeoutMs) {
+  const w = getRegexWorker();
+  if (!w) return Promise.resolve(runRegexJob(job));   // 降级：无 Worker（极老浏览器）直接同步跑
+  const id = ++_regexSeq;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      _regexPending.delete(id);
+      killRegexWorker();           // 卡死的线程无法复用，必须整个销毁重建
+      const err = new Error('正则执行超时（已中断，避免页面卡死）——请简化表达式或缩小范围');
+      err.code = 'TIMEOUT';
+      reject(err);
+    }, timeoutMs || 3000);
+    _regexPending.set(id, { resolve, reject, timer });
+    try { w.postMessage({ id, job }); }
+    catch (e) { clearTimeout(timer); _regexPending.delete(id); reject(e); }
+  });
+}
+
 // === SECTION: DOMPurify：放行自定义图片方案 libimg://（Blob 入库后引用） ===
+// libimg://<id> 不是浏览器认识的 scheme，若把它原样写进 <img src>，浏览器会真的去请求，
+// 控制台就会刷出 ERR_UNKNOWN_URL_SCHEME。所以：
+//   DOM 里保留 data-libimg="<id>"，src 先放 1×1 透明占位，真正加载由 resolveImages() 换成 blob: URL。
+//   导出时由 snapshotPreviewHtml() 把 src 还原成 libimg://<id>，再内联成 data URL。
+const IMG_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
 if (window.DOMPurify) {
   DOMPurify.addHook('beforeSanitizeAttributes', (node) => {
     if (node.tagName === 'IMG') {
@@ -97,8 +204,7 @@ if (window.DOMPurify) {
   });
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     if (node.tagName === 'IMG' && node.hasAttribute('data-libimg')) {
-      node.setAttribute('src', 'libimg://' + node.getAttribute('data-libimg'));
-      node.removeAttribute('data-libimg');
+      node.setAttribute('src', IMG_PLACEHOLDER);
     }
   });
 }
@@ -448,13 +554,7 @@ function applyMdTheme(mode) {
 const TEXT_STYLE_KEY = 'md-text-style';
 const TS_SIZE_MIN = 12, TS_SIZE_MAX = 32, TS_SIZE_DEFAULT = 16;
 
-// 归一化颜色：仅接受 #rgb / #rrggbb，统一转小写 6 位；其余（含空串）视为「跟随主题」。
-function normalizeTextColor(v) {
-  if (typeof v !== 'string') return '';
-  let s = v.trim();
-  if (/^#[0-9a-f]{3}$/i.test(s)) s = '#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
-  return /^#[0-9a-f]{6}$/i.test(s) ? s.toLowerCase() : '';
-}
+// normalizeTextColor 已下沉到 lib/md-core.js（见顶部解构），此处不再重复实现。
 
 function readTextStyle() {
   const def = { size: TS_SIZE_DEFAULT, color: '' };
@@ -703,11 +803,19 @@ if (window.marked && marked.Lexer && marked.Lexer.rules && marked.Lexer.rules.in
     if (rules && rules.emStrongRDelimUnd) rules.emStrongRDelimUnd = NEVER;
   }
 }
-function renderMarkdown() {
+// 渲染入口。
+// opts.force：内容未变时也重渲（主题切换 / 手动刷新等场景）。
+// 默认内容相同则直接返回——避免 resize / 滚动 / 切视图等「无关事件」触发整链重渲。
+let lastRenderedSrc = null;
+let mermaidRendering = Promise.resolve();   // 追踪 mermaid 异步渲染，供导出前 await
+
+function renderMarkdown(opts) {
   const src = editor.value || '';
+  if (!(opts && opts.force) && src === lastRenderedSrc && preview.childElementCount) return;
+  lastRenderedSrc = src;
   // 大文档保护：超 1MB 或 5000 行时跳过开销大的后处理（代码高亮 / mermaid），
-  // 保证输入停顿不把主线程卡死；预览正文仍正常渲染。
-  const heavyDoc = src.length > 1000000 || src.split('\n').length > 5000;
+  // 保证输入停顿不把主线程卡死；预览正文仍正常渲染。行数用偏移缓存，不再全文 split。
+  const heavyDoc = src.length > 1000000 || getLineOffsets(src).length > 5000;
   let html;
   // --- 空状态：展示欢迎卡片，而非斜体占位符 ---
   if (!src.trim()) {
@@ -724,6 +832,11 @@ function renderMarkdown() {
       html = '<p style="color:#e06c75">渲染错误：' + escapeHtml(e.message) + '</p>';
     }
   }
+  // 关键：必须在 sanitize **之前**把 libimg:// 从 src 里摘掉。
+  // DOMPurify 内部会先把字符串解析成 DOM 再消毒，而 <img src="libimg://..."> 一进 DOM
+  // 浏览器就会发起请求 → 控制台刷 ERR_UNKNOWN_URL_SCHEME（hook 已经来不及了）。
+  html = html.replace(/src=(["'])libimg:\/\/([a-z0-9]+)\1/gi,
+    (m, q, id) => 'src=' + q + IMG_PLACEHOLDER + q + ' data-libimg=' + q + id + q);
   preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html, { ADD_TAGS: ['audio', 'source'], ADD_ATTR: ['controls', 'preload', 'autoplay', 'loop'] }) : html;
   // 后处理高亮：对任何 marked 版本都稳，且不依赖已废弃的 setOptions({highlight})
   if (window.hljs && !heavyDoc) {
@@ -733,7 +846,13 @@ function renderMarkdown() {
   }
   // --- Mermaid 图表渲染（按需懒加载 mermaid 库，见 renderMermaidDiagrams）---
   // 大文档跳过：mermaid 每次全量重跑成本高（另有渲染缓存）
-  if (!heavyDoc) renderMermaidDiagrams();
+  if (!heavyDoc) {
+    try {
+      mermaidRendering = Promise.resolve(renderMermaidDiagrams())
+        .then(() => { lastSanitizedHtml = snapshotPreviewHtml(); })   // 图渲染完刷新快照，导出才带图
+        .catch(() => {});
+    } catch (_) { mermaidRendering = Promise.resolve(); }
+  }
   // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
   renderMathFormulas();
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
@@ -741,13 +860,16 @@ function renderMarkdown() {
   // --- 裸图片链接自动渲染为 <img>（见 renderImageEmbeds）---
   renderImageEmbeds();
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
-  headingLineMap = buildHeadingMap(editor.value);
+  // 两侧共用同一个 slugger + 同一遍历顺序：同名标题依次得到「标题」「标题-2」…
+  // 修复：旧实现直接 h.id = slugify(text)，两节「## 总结」会产生重复 id，目录只能跳到第一个。
+  const slugger = createSlugger();
   preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
-    const id = slugify(h.textContent);
-    if (id) h.id = id;   // 始终以 slug 为 id，保证与 buildHeadingMap 一致、锚点可跳转
+    const id = slugger(h.textContent);
+    if (id) h.id = id;
   });
+  headingLineMap = buildHeadingLineMap(editor.value);   // 同为 createSlugger + stripInlineMd，一一对应
   buildToc();   // 同步重建右侧目录大纲（标题已就绪，含 id）
-  lastSanitizedHtml = preview.innerHTML;   // 快照（含 libimg:// 引用，供导出时内联为 data URL）
+  lastSanitizedHtml = snapshotPreviewHtml();   // 快照（保留 libimg:// 引用，供导出时内联为 data URL）
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
 }
@@ -756,27 +878,20 @@ function renderMarkdown() {
 let lastSanitizedHtml = '';
 let headingLineMap = new Map();
 let anchorNavLock = 0;
-function slugify(text) {
-  return String(text).trim().toLowerCase()
-    .replace(/[^\w一-龥\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-');
+// slugify / buildHeadingLineMap 已下沉到 lib/md-core.js：
+// 两侧（DOM 标题 id 与源码行映射）必须共用同一个 slugger，否则同名标题会产生重复 id。
+// 行偏移缓存：同一份字符串（不可变）只算一次。
+// 旧实现在 renderMarkdown / updateGutter / updatePos / scrollEditorToLine / 查找定位里
+// 各自 editor.value.split('\n')，1MB 文档下每次编辑要建多份临时数组。
+let _loCache = { v: null, off: [0] };
+function getLineOffsets(v) {
+  if (_loCache.v !== v) _loCache = { v, off: lineOffsets(v) };
+  return _loCache.off;
 }
-function buildHeadingMap(src) {
-  const map = new Map();
-  src.split('\n').forEach((line, i) => {
-    const m = line.match(/^#{1,6}\s+(.*)$/);
-    if (m) {
-      const slug = slugify(m[1]);
-      if (slug && !map.has(slug)) map.set(slug, i);
-    }
-  });
-  return map;
-}
+
 function scrollEditorToLine(line) {
-  const lines = editor.value.split('\n');
-  let pos = 0;
-  for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
+  const off = getLineOffsets(editor.value);
+  const pos = off[Math.max(0, Math.min(line, off.length - 1))];
   if (viewMode !== 'preview') {
     // lh 仅此处需要；放在分支内，避免预览模式下 getComputedStyle 触发 reflow、打断 tocJumpTo 的 smooth 滚动
     const lh = parseFloat(getComputedStyle(editor).lineHeight) || 25;
@@ -972,12 +1087,14 @@ function blobToDataURL(blob) {
 }
 function resolveImages() {
   if (!libDb) return;
-  const imgs = preview.querySelectorAll('img[src^="libimg://"]');
+  // 按 data-libimg 定位（src 此时是占位图）；已解析过的图 src 已是 blob:，无需重复处理
+  const imgs = preview.querySelectorAll('img[data-libimg]');
   if (!imgs.length) return;
   const newUrls = new Set();
   const pending = [];
   imgs.forEach((img) => {
-    const id = img.getAttribute('src').slice('libimg://'.length);
+    const id = img.getAttribute('data-libimg');
+    if (img.getAttribute('src') && img.getAttribute('src').startsWith('blob:')) return;   // 已解析
     pending.push((async () => {
       let entry = imgUrlCache.get(id);
       if (!entry) {
@@ -998,13 +1115,29 @@ function resolveImages() {
       const url = URL.createObjectURL(entry.blob);
       newUrls.add(url);
       img.loading = 'lazy';   // 文库图延迟加载：多图/大文档不阻塞首屏（与裸链接图一致）
-      img.src = url;
+      img.src = url;          // data-libimg 保留，snapshotPreviewHtml() 据此还原成 libimg://
       img.classList.remove('broken');
     })());
   });
   Promise.all(pending).then(() => {
     activeImgUrls.forEach((u) => { if (!newUrls.has(u)) URL.revokeObjectURL(u); });
     activeImgUrls = newUrls;
+  });
+}
+
+// 导出用快照：克隆预览 DOM，但把渲染用的 blob: 临时 URL 还原成 libimg://<id>，
+// 这样 inlineLibImages() 仍能命中并把图片内联成 data URL（否则导出的 HTML 会丢图）。
+function snapshotPreviewHtml() {
+  const html = preview.innerHTML;
+  // 常见情况（无文库图）：直接返回，零额外开销
+  if (html.indexOf('data-libimg') < 0) return html;
+  // 纯字符串改写，绝不去碰 <img> 元素：哪怕是在「克隆出来的游离节点」上把 src 设成
+  // libimg://，Chrome 也会真的发起一次请求（控制台 ERR_UNKNOWN_URL_SCHEME）。
+  return html.replace(/<img\b([^>]*)>/gi, (whole, attrs) => {
+    const idm = attrs.match(/data-libimg="([a-z0-9]+)"/i);
+    if (!idm) return whole;
+    const rest = attrs.replace(/\ssrc="[^"]*"/i, '');
+    return '<img src="libimg://' + idm[1] + '"' + rest + '>';
   });
 }
 
@@ -1022,7 +1155,7 @@ function renderEditorHighlight() {
     return;
   }
   // 超长文档（数千行）整篇 hljs 重算开销大，跳过覆盖层高亮避免编辑卡顿（与移动端同降级策略）
-  if (editor.value.split('\n').length > 3000) {
+  if (getLineOffsets(editor.value).length > 3000) {
     editor.parentElement.classList.remove('has-overlay');
     editorHighlight.textContent = '';
     return;
@@ -1092,18 +1225,13 @@ function applyWrap() {
 
 // === SECTION: 统计 / 行号 / 光标位置 ===
 function updateStats() {
-  const t = editor.value;
-  const cjkRe = /[一-鿿぀-ヿ가-힯]/g;
-  const cjk = (t.match(cjkRe) || []).length;                               // 中日韩按字
-  const enWords = (t.replace(cjkRe, ' ').match(/[A-Za-z0-9]+/g) || []).length; // 其余按词
-  const words = cjk + enWords;
-  const readMin = Math.max(1, Math.round(words / 300));
-  const txt = words + ' 字 · ' + readMin + ' 分';
+  const r = countWords(editor.value);          // 统计口径（CJK 按字 / 其余按词）在 md-core 里，有单测
+  const txt = r.words + ' 字 · ' + r.readMin + ' 分';
   $('#stat').textContent = txt;
   const ri = $('#readInfo'); if (ri) ri.textContent = txt;   // 预览模式底部栏复用同一数据
 }
 function updateGutter() {
-  const lines = editor.value.split('\n').length;
+  const lines = getLineOffsets(editor.value).length;
   if (gutter.dataset.lines === String(lines)) return;
   gutter.dataset.lines = String(lines);
   let s = '';
@@ -1111,24 +1239,18 @@ function updateGutter() {
   gutter.textContent = s;   // white-space:pre 下逐行对齐 #editor（line-height:25px 一致）
 }
 function updatePos() {
-  const v = editor.value, pos = editor.selectionStart;
-  const before = v.slice(0, pos);
-  const line = before.split('\n').length;
-  const col = pos - before.lastIndexOf('\n');   // 无换行时 lastIndexOf=-1 → col=pos+1（第 1 列起算）
+  const { line, col } = posToLineCol(getLineOffsets(editor.value), editor.selectionStart);
   $('#posInfo').textContent = '行 ' + line + '，列 ' + col;
 }
-// 统计 / 行号 / 光标位置：input 每键触发，合并到 rAF 下一帧只跑一次，
-// 大文档不再逐键同步全量扫描（正则统计 + 行号串重建）
-let _statsRaf = 0;
-function scheduleStats() {
-  if (_statsRaf) return;
-  _statsRaf = requestAnimationFrame(() => {
-    _statsRaf = 0;
-    updateStats();
-    updateGutter();
-    updatePos();
-  });
-}
+// 统计 / 行号 / 光标位置：input 每键触发。
+// 旧实现用 rAF 合并——但连续打字时「每帧一次」仍是 60 次/秒的全量正则扫描。
+// 改成「120ms 去抖 + 空闲回调」：只在真正停手时算一次，大文档逐键开销归零。
+const runStats = debounce(() => {
+  const work = () => { updateStats(); updateGutter(); updatePos(); };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(work, { timeout: 300 });
+  else work();
+}, 120);
+function scheduleStats() { runStats(); }
 
 // === SECTION: 视图：双栏 / 编辑 / 预览 ===
 const VIEW_CYCLE = ['split', 'edit', 'preview'];
@@ -1258,33 +1380,39 @@ function readingScrollRatio() {
   return sMax > 0 ? Math.min(1, el.scrollTop / sMax) : 0;
 }
 
+let _progressRaf = 0;
 function updateReadingProgress() {
-  if (!readingProgress) return;
-  readingProgress.style.width = currentLibId ? (readingScrollRatio() * 100) + '%' : '0';
+  if (!readingProgress || _progressRaf) return;   // 每帧最多写一次，避免滚动时反复触发样式重算
+  _progressRaf = requestAnimationFrame(() => {
+    _progressRaf = 0;
+    readingProgress.style.width = currentLibId ? (readingScrollRatio() * 100) + '%' : '0';
+  });
 }
 
 // 保存阅读进度到文库文档（2s 去抖，远低于同滚频率，未打开文库文档时即跳过）
+// 阅读位置独立成小记录（约几十字节）。旧实现为了存一个浮点数，
+// 每滚停一次就把整篇正文 + 20 条历史快照读出来再写回去。
 const saveReadingProgress = debounce(() => {
   if (!currentLibId || !libDb) return;
-  const ratio = readingScrollRatio();
-  idbGet(currentLibId).then((doc) => {
-    if (!doc) return;
-    doc.scrollRatio = ratio;
-    doc.lastReadAt = Date.now();
-    return idbPut(doc);
-  }).catch(() => {});
+  idbPutPosition({ id: currentLibId, scrollRatio: readingScrollRatio(), lastReadAt: Date.now() }).catch(() => {});
 }, 2000);
 
 // 恢复到上次阅读位置（延迟双 rAF，等预览渲染完成、scrollHeight 稳定）
 function restoreReadingProgress() {
   if (!currentLibId) return;
-  idbGet(currentLibId).then((doc) => {
-    if (!doc || doc.scrollRatio == null) return;
+  const docId = currentLibId;
+  idbGetPosition(docId).then(async (pos) => {
+    let ratio = pos ? pos.scrollRatio : null;
+    if (ratio == null) {                       // 兼容旧数据：位置曾随文档一起存
+      const doc = await idbGet(docId).catch(() => null);
+      ratio = doc && doc.scrollRatio != null ? doc.scrollRatio : null;
+    }
+    if (ratio == null) return;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const el = (viewMode === 'preview') ? previewPane : editor;
         const sMax = el.scrollHeight - el.clientHeight;
-        if (sMax > 0) el.scrollTop = doc.scrollRatio * sMax;
+        if (sMax > 0) el.scrollTop = ratio * sMax;
         updateReadingProgress();
       });
     });
@@ -1307,41 +1435,74 @@ function setSaveState(cls, text) {
   el.className = curSaveClass;
   el.textContent = text;
 }
-const saveDraft = debounce(() => {
-  setSaveState('saving', '保存中…');
-  const content = editor.value;
-  // 容量保护：正文超 4MB（localStorage 5MB 配额的安全阈值）不再写草稿，
-  // 避免每次输入停顿都抛配额异常；提示改用导出 / 文库保存
-  if (content.length > 4000000) {
-    setSaveState('warn', '⚠ 内容过大，草稿未保存（请用导出/文库）');
+/* 草稿写入策略（旧实现的三个问题）：
+ *   1. 文库文档的正文已经由 writebackLib 落进 IndexedDB，再整篇塞一份到 localStorage 纯属重复占配额；
+ *   2. 每次都是同步全量写，4MB 文档每 800ms 卡一次主线程；
+ *   3. 超过 4MB 干脆不存（用户以为存了）。
+ * 现在：文库文档跳过；≤1MB 仍写 localStorage（首屏可同步秒开）；更大则落 IDB drafts 表。
+ */
+const DRAFT_LS_MAX = 1024 * 1024;      // localStorage 侧的镜像上限（1MB）
+const DRAFT_IDB_MAX = 32 * 1024 * 1024; // IDB 侧上限（再大就提示用户用文库/导出）
+let hadBigDraft = false;                // 是否曾写过大文档草稿（避免小文档时反复写空记录）
+
+function writeDraftNow() {
+  if (currentLibId) {                  // 文库文档：正文由 writebackLib 负责，不再重复写一份草稿
+    setSaveState('saved', '✓ 已存文库');
     return;
   }
+  const content = editor.value;
+  const at = Date.now();
+
+  if (content.length > DRAFT_LS_MAX) {
+    // 大文档：清掉可能残留的旧 localStorage 草稿，改走 IndexedDB
+    try { localStorage.removeItem('md-draft'); } catch (_) {}
+    try { localStorage.setItem('md-name', currentName); } catch (_) {}
+    if (content.length > DRAFT_IDB_MAX) {
+      setSaveState('warn', '⚠ 文档过大，草稿未自动保存（请用导出 / 文库）');
+      return;
+    }
+    openLibDb()
+      .then(() => idbPutDraft({ id: 'current', content, name: currentName, at }))
+      .then(() => { hadBigDraft = true; setSaveState('saved', '✓ 已保存（大文档 · 本地库）'); })
+      .catch(() => setSaveState('warn', '⚠ 草稿保存失败'));
+    return;
+  }
+
   try {
     localStorage.setItem('md-draft', content);
     localStorage.setItem('md-name', currentName);
+    localStorage.setItem('md-draft-ts', String(at));
     setSaveState('saved', '✓ 已保存');
+    // 从「大文档」缩回小文档时，清一次 IDB 里的旧草稿，避免下次启动被旧内容覆盖
+    if (hadBigDraft && libDb) {
+      hadBigDraft = false;
+      idbPutDraft({ id: 'current', content: '', name: currentName, at: 0 }).catch(() => {});
+    }
   } catch (e) {
-    setSaveState('saved', '草稿已满');
+    // localStorage 满：退化为 IDB 存储，不再静默丢草稿
+    openLibDb()
+      .then(() => idbPutDraft({ id: 'current', content, name: currentName, at }))
+      .then(() => setSaveState('saved', '✓ 已保存（本地库）'))
+      .catch(() => setSaveState('warn', '⚠ 存储空间不足，草稿未保存'));
   }
+}
+
+const saveDraft = debounce(() => {
+  setSaveState('saving', '保存中…');
+  writeDraftNow();
 }, 800);
 
-// 兜底保存：页面隐藏/卸载前立即同步写草稿 + 文库最新内容，
+// 兜底保存：页面隐藏/卸载前立即写草稿 + 文库正文 + 阅读位置，
 // 补上防抖窗口内最后 <800ms 的输入（浏览器会等待未完成的 IndexedDB 事务）
 function flushSave() {
-  try {
-    if (editor.value.length <= 4000000) {
-      localStorage.setItem('md-draft', editor.value);
-      localStorage.setItem('md-name', currentName);
-    }
-  } catch (_) {}
-  if (currentLibId && libDb) {
-    const ratio = readingScrollRatio();
-    idbGet(currentLibId).then((oldDoc) => {
-      const history = (oldDoc && oldDoc.history) || [];
-      // 只写最新内容与历史（不 push 新快照），避免卸载前异步链过长中断
-      return idbPut({ id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now(), history, autoName: currentNameIsAuto, scrollRatio: ratio, lastReadAt: Date.now() });
-    }).catch(() => {});
-  }
+  writeDraftNow();
+  if (!currentLibId || !libDb) return;
+  const ratio = readingScrollRatio();
+  idbPut({                                  // 只写正文与元信息：history 已独立成仓库，不再随文档全量重写
+    id: currentLibId, name: currentName, content: editor.value, updatedAt: Date.now(),
+    autoName: currentNameIsAuto,
+  }).catch(() => {});
+  idbPutPosition({ id: currentLibId, scrollRatio: ratio, lastReadAt: Date.now() }).catch(() => {});
 }
 // 仅注册 pagehide：移动端/桌面端覆盖更全，且避免与 beforeunload 重复执行同一保存
 window.addEventListener('pagehide', flushSave);
@@ -1382,12 +1543,33 @@ function updateFileName() {
   el.title = currentName;
 }
 function loadDraft() {
+  // 第一优先：localStorage（同步、秒开，适合 ≤1MB 的常规文档）
   const draft = localStorage.getItem('md-draft');
   if (draft !== null) editor.value = draft;
   const name = localStorage.getItem('md-name');
   if (name) { currentName = name; currentNameIsAuto = false; }
+  resetUndo();
   updateFileName();
   syncPodcastOnLoad();
+  restoreIdbDraft();      // 第二优先：IDB 大文档草稿（>1MB 时不进 localStorage，避免 5MB 配额与同步写卡顿）
+}
+
+// 大文档草稿：正文超过 localStorage 安全阈值后改存 IndexedDB（drafts 表）
+async function restoreIdbDraft() {
+  try {
+    await openLibDb();
+    if (!libDb) return;
+    const rec = await idbGetDraft('current');
+    if (!rec || !rec.content) return;
+    const lsTs = Number(localStorage.getItem('md-draft-ts') || 0);
+    if (rec.content === editor.value) return;
+    if (rec.at <= lsTs) return;                       // localStorage 里的更新，保持现状
+    editor.value = rec.content;
+    if (rec.name) { currentName = rec.name; currentNameIsAuto = false; updateFileName(); }
+    resetUndo();
+    afterChange({ skipWriteback: true });
+    toast('已恢复大文档草稿（' + humanBytes(rec.content.length) + '）', 'info', 4000);
+  } catch (_) { /* 草稿恢复失败不影响正常使用 */ }
 }
 // 高亮去抖：input 每键都触发，合并到下一帧只跑一次，避免 hljs 全量重绘造成的逐键回流卡顿
 let _hlRaf = 0;
@@ -1421,6 +1603,7 @@ async function openFile() {
       currentLibId = null;                       // 打开本地文件 → 脱离文库上下文
       localStorage.removeItem('md-lib-current');
       editor.value = await file.text();
+      resetUndo();                               // 换文档 → 旧的撤销快照不再合法
       updateFileName();
       afterChange();
       syncPodcastOnLoad();
@@ -1569,6 +1752,7 @@ $('#btnNew').addEventListener('click', async () => {
   if (editor.value.trim() && !(await askConfirm('新建文档', '未保存的内容将丢失。'))) return;
   currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
   localStorage.removeItem('md-lib-current');
+  resetUndo();
   try {
     const text = await navigator.clipboard.readText();
     if (text) {
@@ -1756,8 +1940,11 @@ function exportTextColorCss() {
 }
 
 async function exportHTML() {
+  // mermaid 是异步渲染的：不等它画完就快照，导出里只会剩占位符。
+  try { await mermaidRendering; } catch (_) {}
+  lastSanitizedHtml = snapshotPreviewHtml();   // 重新取快照（含刚画完的图表，且保留 libimg:// 供内联）
   // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
-  const html = await inlineLibImages(lastSanitizedHtml || preview.innerHTML);
+  const html = await inlineLibImages(lastSanitizedHtml);
   const mdTheme = mdThemeMode || 'github';
   // 抽取当前预览主题的颜色块（如不可用则降级为默认亮色，行为与旧版一致）
   const themeCss = getMdThemeCss(mdTheme);
@@ -1792,6 +1979,7 @@ async function exportPDF() {
     if (!window.html2pdf) { window.print(); return; }   // 加载失败降级系统打印
   }
   flash('正在生成 PDF…');
+  try { await mermaidRendering; } catch (_) {}   // 等图表画完再截图，避免 PDF 里出现空白占位
   // 克隆预览内容到 off-screen 容器，强制亮色主题，不受当前视图 / 暗色主题影响
   const wrapper = document.createElement('div');
   wrapper.setAttribute('data-theme', 'light');
@@ -1824,11 +2012,73 @@ async function exportPDF() {
 // === SECTION: 文本宏命令（Micro-Plugin / Text Pipeline） ===
 // 每个宏命令都是一个纯函数：读 editor.value（当前文章纯文本），
 // 做字符串变换后写回 editor.value，并调用 afterChange() 触发渲染/统计/草稿保存/文库回写。
-function commitText(next, label) {
-  if (next === editor.value) { flash('文本无变化：' + label); return; }
+/* === SECTION: 撤销栈（程序化改写后仍可 Ctrl+Z） ===
+ * 背景：`editor.value = next` 会清空浏览器原生 undo 纪录，导致「全部替换 / AI 应用 /
+ * 中英加空格」之后按 Ctrl+Z 完全无反应（旧代码只在 Vim 里用 execCommand('undo') 打了补丁）。
+ * 做法：凡是「程序化改写」先压一份快照，撤回时整段还原；原生输入仍交给浏览器自己管。
+ * 上限：60 步 / 8MB 总量，超出按最旧丢弃，避免 1MB 文档 × 50 步吃爆内存。
+ */
+const UNDO_MAX_STEPS = 60;
+const UNDO_MAX_BYTES = 8 * 1024 * 1024;
+let undoStack = [];        // [{ v, s, e, label }]
+let redoStack = [];
+let undoBytes = 0;
+
+function resetUndo() { undoStack = []; redoStack = []; undoBytes = 0; }
+
+function pushUndo(label) {
+  const snap = { v: editor.value, s: editor.selectionStart, e: editor.selectionEnd, label: label || '编辑' };
+  undoStack.push(snap);
+  undoBytes += snap.v.length;
+  while (undoStack.length > UNDO_MAX_STEPS || (undoBytes > UNDO_MAX_BYTES && undoStack.length > 1)) {
+    const dropped = undoStack.shift();
+    undoBytes -= dropped.v.length;
+  }
+  redoStack.length = 0;
+}
+
+// 应用一次「可撤销的程序化改写」
+function applyProgrammatic(next, label, selStart, selEnd) {
+  if (next === editor.value) { flash('文本无变化：' + label); return false; }
+  pushUndo(label);
   editor.value = next;
+  if (typeof selStart === 'number') {
+    const s = Math.max(0, Math.min(selStart, next.length));
+    const e = Math.max(s, Math.min(selEnd == null ? s : selEnd, next.length));
+    editor.selectionStart = s; editor.selectionEnd = e;
+  }
   afterChange();
-  flash('已应用：' + label);
+  return true;
+}
+
+function undoStep() {
+  if (!undoStack.length) return false;
+  redoStack.push({ v: editor.value, s: editor.selectionStart, e: editor.selectionEnd });
+  const snap = undoStack.pop();
+  undoBytes -= snap.v.length;
+  editor.value = snap.v;
+  const s = Math.min(snap.s, snap.v.length), e = Math.min(snap.e, snap.v.length);
+  editor.selectionStart = s; editor.selectionEnd = e;
+  afterChange();
+  flash('已撤销：' + snap.label);
+  return true;
+}
+
+function redoStep() {
+  if (!redoStack.length) return false;
+  const snap = redoStack.pop();
+  undoStack.push({ v: editor.value, s: editor.selectionStart, e: editor.selectionEnd, label: snap.label || '重做' });
+  undoBytes += editor.value.length;
+  editor.value = snap.v;
+  const s = Math.min(snap.s, snap.v.length), e = Math.min(snap.e, snap.v.length);
+  editor.selectionStart = s; editor.selectionEnd = e;
+  afterChange();
+  flash('已重做');
+  return true;
+}
+
+function commitText(next, label) {
+  if (applyProgrammatic(next, label)) flash('已应用：' + label);
 }
 
 const TEXT_ACTIONS = {
@@ -1864,45 +2114,56 @@ const TEXT_ACTIONS = {
     let cursor = (typeof editor.selectionStart === 'number') ? editor.selectionStart : 0;
     let total = 0;
 
-    // 构建正则：空 → null；正则模式非法 → false（文案提示）
-    function buildRegex() {
+    /* 构建查找参数。三种返回：
+     *   null  → 查找框为空
+     *   false → 已就地提示错误（正则非法 / 超长）
+     *   { pattern, flags, isRegex }
+     * 长度上限 MAX_PATTERN_LEN 来自 md-core：既防误粘贴一大段文本当正则，
+     * 也降低构造出灾难性回溯表达式的概率。 */
+    function buildPattern() {
       const f = $find.value;
       if (!f) return null;
       if ($re.checked) {
-        // 加 m（多行）标志：使 ^ $ 表示行首/行尾（而非整段首尾），符合"逐行查找"直觉
-        try { return new RegExp(f, 'gm'); } catch (e) { $count.textContent = '正则无效：' + e.message; return false; }
+        const v = validatePattern(f);
+        if (!v.ok) { $count.textContent = '查找内容过长（上限 ' + MAX_PATTERN_LEN + ' 字符）'; return false; }
+        // 加 m（多行）标志：使 ^ $ 表示行首/行尾（而非整段首尾），符合「逐行查找」直觉
+        try { new RegExp(f, 'gm'); } catch (e) { $count.textContent = '正则无效：' + e.message; return false; }
+        return { pattern: f, flags: 'gm', isRegex: true };
       }
       const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(esc, 'g');
+      return { pattern: esc, flags: 'g', isRegex: false };
     }
-    // 替换串转义：支持 \n \t \r \f \v 等（与查找框正则一致）；\$ → 字面 $；\\ → 字面反斜杠；保留 $1 反向引用
-    function processReplacement(s) {
-      s = s.split('\\$').join('$$');                                  // \$ → 字面 $（JS 替换串里 $$ 表示字面 $）
-      s = s.split('\\\\').join('@@__BS__@@');                       // 先保护字面反斜杠对 \\
-      s = s.split('\\n').join('\n').split('\\t').join('\t')        // 转换单反斜杠转义序列
-            .split('\\r').join('\r').split('\\f').join('\f').split('\\v').join('\v');
-      return s.split('@@__BS__@@').join('\\');                       // 还原字面反斜杠
+
+    /* 统一执行入口：正则模式送进 Worker（超时即 terminate，页面不会被回溯卡死），
+     * 普通文本模式直接同步跑（已被转义，无回溯风险）。 */
+    async function execFindReplace(job) {
+      const p = buildPattern();
+      if (p === null) return { empty: true };
+      if (p === false) return { invalid: true };
+      const full = { src: editor.value, pattern: p.pattern, flags: p.flags, replacement: job.replacement, from: job.from, mode: job.mode };
+      try {
+        const out = p.isRegex ? await runRegex(full, 3000) : runRegexJob(full);
+        return out || {};
+      } catch (e) {
+        $count.textContent = e.code === 'TIMEOUT'
+          ? '⚠ 表达式过于复杂，已中断执行（页面未卡死）。请简化正则'
+          : (e.message || '执行失败');
+        return { error: true };
+      }
     }
-    // 单处替换专用：把替换串里的 $1/$2…（捕获组）、$&（整段匹配）按当前匹配 m 解析为真实文本。
-    // 不能用 processReplacement 的“裸 $ → $$”逻辑（那是给原生 replaceAll 用的），否则 $1 会被当字面量；
-    // 这里直接基于 m 数组手动求值，与 replaceAll 走的原生 src.replace(re, processReplacement(...)) 互补。
-    function evaluateMatchReplacement(replStr, matchArray) {
-      return replStr.replace(/\$(\$|&|\d+)/g, (ref, p) => {
-        if (p === '$') return '$';
-        if (p === '&') return matchArray[0];
-        const idx = parseInt(p, 10);
-        if (idx > 0 && idx < matchArray.length) {
-          return matchArray[idx] !== undefined ? matchArray[idx] : '';
-        }
-        return ref;
-      });
-    }
-    function recount() {
-      const re = buildRegex();
-      if (re === false) return;
-      if (!re) { $count.textContent = '输入查找内容'; total = 0; currentSearchHit = null; return; }
-      total = (editor.value.match(re) || []).length;
-      $count.textContent = total ? ('找到 ' + total + ' 处') : '未找到匹配';
+    // 替换串转义（\$ \n \t…）由 lib/md-core.js 的 processReplacement 提供，已有单测覆盖。
+    // 单处替换的反向引用求值同样在 md-core 里（evaluateMatchReplacement），与 replaceAll 语义互补。
+    let recountSeq = 0;
+    async function recount() {
+      const seq = ++recountSeq;                       // 输入很快时丢弃过期结果，避免文案倒退
+      const r = await execFindReplace({ mode: 'count' });
+      if (seq !== recountSeq) return;
+      if (r.empty) { total = 0; $count.textContent = '输入查找内容'; currentSearchHit = null; return; }
+      if (r.invalid || r.error) { total = 0; return; }
+      total = r.count;
+      $count.textContent = total
+        ? ('找到 ' + total + ' 处' + (r.truncated ? '（已截断统计）' : ''))
+        : '未找到匹配';
       if (!total) { currentSearchHit = null; renderEditorHighlight(); }
     }
     // 等宽字体单字符宽度（缓存，避免每次查找都建 DOM）
@@ -1924,10 +2185,9 @@ const TEXT_ACTIONS = {
     // 显式把匹配位置滚入可视区：setSelectionRange 在 wrap=off 长文档下纵向滚动不可靠，
     // 这里直接按「行/列」算 scrollTop/scrollLeft 兜底，保证关键词始终在屏幕内（覆盖层同步跟随）。
     function revealMatch(start) {
-      const before = editor.value.slice(0, start);
-      const lines = before.split('\n');
-      const line = lines.length - 1;
-      const col = lines[line].length;
+      const { line: ln, col } = posToLineCol(getLineOffsets(editor.value), start);
+      const line = ln - 1;            // 转 0 基行号，下面按行高算 Y
+      const colChars = col - 1;       // 转 0 基列号
       const cs = getComputedStyle(editor);
       const lh = parseFloat(cs.lineHeight) || 25;
       const padTop = parseFloat(cs.paddingTop) || 0;
@@ -1942,7 +2202,7 @@ const TEXT_ACTIONS = {
       }
       if (!wrapMode) {                                        // 不换行：横向也可能超出，按列滚动
         const cw = measureCharWidth(cs);
-        const charX = col * cw + padLeft;
+        const charX = colChars * cw + padLeft;
         const viewLeft = editor.scrollLeft;
         const viewRight = viewLeft + editor.clientWidth;
         if (charX < viewLeft || charX + cw > viewRight) {
@@ -1952,34 +2212,28 @@ const TEXT_ACTIONS = {
       syncHighlightScroll();
     }
     // 跳到下一处并选中（循环回绕），不修改内容
-    function findNext() {
-      const re = buildRegex(); if (re === false) return;
-      if (!re) { $count.textContent = '请输入查找内容'; return; }
-      const src = editor.value;
-      re.lastIndex = cursor;
-      let m = re.exec(src), wrapped = false;
-      if (!m) { re.lastIndex = 0; m = re.exec(src); wrapped = true; }
-      if (!m) { $count.textContent = '未找到匹配'; return; }
+    async function findNext() {
+      const r = await execFindReplace({ mode: 'find', from: cursor });
+      if (r.empty) { $count.textContent = '请输入查找内容'; return; }
+      if (r.invalid || r.error) return;
+      if (r.index < 0) { $count.textContent = '未找到匹配'; return; }
       editor.focus();
-      editor.setSelectionRange(m.index, m.index + m[0].length);
-      currentSearchHit = { start: m.index, end: m.index + m[0].length };
-      revealMatch(m.index);
+      editor.setSelectionRange(r.index, r.index + r.length);
+      currentSearchHit = { start: r.index, end: r.index + r.length };
+      revealMatch(r.index);
       renderEditorHighlight();
-      cursor = m.index + (m[0].length || 1);   // 零宽断言（^ $ \b）length=0，兜底 +1 防原地死循环
-      $count.textContent = (wrapped ? '已到末尾，回到开头 · ' : '') + '找到 ' + total + ' 处';
+      cursor = r.index + (r.length || 1);   // 零宽断言（^ $ \b）length=0，兜底 +1 防原地死循环
+      $count.textContent = (r.wrapped ? '已到末尾，回到开头 · ' : '') + '找到 ' + total + ' 处';
     }
     // 替换下一处（保留 $1 等反向引用语义）
-    function replaceNext() {
-      const re = buildRegex(); if (re === false) return;
-      if (!re) { $count.textContent = '请输入查找内容'; return; }
+    async function replaceNext() {
+      const r = await execFindReplace({ mode: 'find', from: cursor });
+      if (r.empty) { $count.textContent = '请输入查找内容'; return; }
+      if (r.invalid || r.error || r.index < 0) { if (!r.error && !r.invalid) $count.textContent = '没有可替换的匹配'; return; }
       const src = editor.value;
-      re.lastIndex = cursor;
-      let m = re.exec(src);
-      if (!m) { re.lastIndex = 0; m = re.exec(src); }
-      if (!m) { $count.textContent = '没有可替换的匹配'; return; }
-      const start = m.index, end = start + m[0].length;
-      // 用自定义求值器解析 $1/$& 等反向引用（single 字面正则无捕获组，原生 replace 会把 $1 当字面量）
-      const repl = evaluateMatchReplacement(processReplacement($replace.value), m);
+      const start = r.index, end = start + r.length;
+      // 用自定义求值器解析 $1/$& 等反向引用（单处替换走字面拼接，原生 replace 会把 $1 当字面量）
+      const repl = evaluateMatchReplacement(processReplacement($replace.value), r.groups && r.groups.length ? r.groups : [r.text || '']);
       const out = src.slice(0, start) + repl + src.slice(end);
       cursor = start + (repl.length || 1);   // 零宽匹配时 repl 可能为空，兜底 +1 防死循环
       commitText(out, '查找替换（1 处）');
@@ -1988,19 +2242,17 @@ const TEXT_ACTIONS = {
       currentSearchHit = { start: start, end: cursor };
       revealMatch(cursor);
       renderEditorHighlight();
-      recount();
+      await recount();
       $count.textContent = '已替换 · 还剩 ' + total + ' 处';
     }
-    function replaceAll() {
-      const re = buildRegex(); if (re === false) return;
-      if (!re) { $count.textContent = '请输入查找内容'; return; }
-      const src = editor.value;
-      const repl = processReplacement($replace.value);
-      const count = (src.match(re) || []).length;
-      if (count === 0) { $count.textContent = '未找到匹配'; return; }
-      const out = src.replace(re, repl);
-      commitText(out, `查找替换（${count} 处）`);
-      $count.textContent = `已替换 ${count} 处`;
+    async function replaceAll() {
+      const r = await execFindReplace({ mode: 'replaceAll', replacement: processReplacement($replace.value) });
+      if (r.empty) { $count.textContent = '请输入查找内容'; return; }
+      if (r.invalid || r.error) return;
+      if (r.truncated) { $count.textContent = '⚠ 匹配过多或表达式过重，已中止替换（未改动内容）'; return; }
+      if (!r.count) { $count.textContent = '未找到匹配'; return; }
+      commitText(r.text, `查找替换（${r.count} 处）`);
+      $count.textContent = `已替换 ${r.count} 处`;
       closePanel();
     }
     function closePanel() {
@@ -2030,10 +2282,8 @@ const TEXT_ACTIONS = {
 
   // 2. 中英文之间自动加空格（Typographic 美化）
   formatSpacing() {
-    let t = editor.value
-      .replace(/([\u4e00-\u9fa5])([A-Za-z0-9])/g, '$1 $2')
-      .replace(/([A-Za-z0-9])([\u4e00-\u9fa5])/g, '$1 $2');
-    commitText(t, '中英排版优化');
+    // 用 \p{Script=Han} 覆盖 CJK 扩展区（旧实现只处理 \u4e00-\u9fa5 基本区）
+    commitText(formatSpacingText(editor.value), '中英排版优化');
   },
 
   // 3. 清除所有空行
@@ -2248,11 +2498,32 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
   const model = cfg.model || 'free';
   if (!opts.quiet) toast('AI 正在思考…', 'info', 60000);
   let full = '';
+  /* 超时保护（旧实现完全没有）：
+   *   - 空闲超时：60s 内一个 token 都没来 → 认为对端挂死，主动 abort
+   *   - 总超时：5min 硬上限，避免「一直在吐字但永远不结束」
+   *   - 用户手动停止（opts.signal）优先，且两者都保留已生成内容 */
+  const IDLE_MS = opts.idleTimeout || 60000;
+  const TOTAL_MS = opts.timeout || 300000;
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  let timedOutMsg = '';
+  let idleTimer = 0;
+  const bumpIdle = () => {
+    if (!ctrl) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { timedOutMsg = 'AI 响应超时（' + Math.round(IDLE_MS / 1000) + 's 无新内容）'; try { ctrl.abort(); } catch (_) {} }, IDLE_MS);
+  };
+  const totalTimer = ctrl ? setTimeout(() => { timedOutMsg = 'AI 生成超时（已超过 ' + Math.round(TOTAL_MS / 60000) + ' 分钟）'; try { ctrl.abort(); } catch (_) {} }, TOTAL_MS) : 0;
+  if (opts.signal && ctrl && opts.signal.addEventListener) {
+    if (opts.signal.aborted) { try { ctrl.abort(); } catch (_) {} }
+    else opts.signal.addEventListener('abort', () => { try { ctrl.abort(); } catch (_) {} });
+  }
+  const cleanupTimers = () => { clearTimeout(idleTimer); clearTimeout(totalTimer); };
+  bumpIdle();
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-      signal: opts.signal || undefined,
+      signal: ctrl ? ctrl.signal : (opts.signal || undefined),
       body: JSON.stringify({
         model,
         messages: [
@@ -2268,12 +2539,20 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
       try { const t = await resp.text(); const j = JSON.parse(t); if (j && j.error) msg += '：' + (j.error.message || j.error); } catch (_) {}
       throw new Error(msg);
     }
+    if (!resp.body || !resp.body.getReader) {          // 极少数环境下 body 为空：退化为整段读取
+      const txt = await resp.text();
+      cleanupTimers();
+      const content = parseAiContent(txt);
+      if (content && onToken) onToken(content, content);
+      return content;
+    }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '', sseMode = null;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      bumpIdle();                                        // 有心跳就重置空闲计时
       buffer += decoder.decode(value, { stream: true });
       if (sseMode === null) {
         const head = buffer.trimStart();
@@ -2286,14 +2565,8 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
           const line = buffer.slice(0, idx).trim();
           buffer = buffer.slice(idx + 1);
           if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
-          if (!payload || payload === '[DONE]') continue;
-          try {
-            const j = JSON.parse(payload);
-            const ch = j.choices && j.choices[0];
-            const delta = (ch && ((ch.delta && ch.delta.content) || (ch.message && ch.message.content))) || '';
-            if (delta) { full += delta; if (onToken) onToken(delta, full); }
-          } catch (_) { /* keepalive / 非 JSON */ }
+          const delta = parseSseLine(line);      // 与 md-core 单测同一份解析逻辑
+          if (delta) { full += delta; if (onToken) onToken(delta, full); }
         }
       }
     }
@@ -2302,9 +2575,15 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
       full = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
       if (onToken) onToken(full, full);
     }
+    cleanupTimers();
     return full.trim();
   } catch (e) {
-    if (e && e.name === 'AbortError') return full; // 主动停止：保留已生成内容
+    cleanupTimers();
+    if (e && e.name === 'AbortError') {
+      // 主动停止 或 超时中断：都保留已生成内容，交给用户决定是否应用
+      if (timedOutMsg) toast('⏱ ' + timedOutMsg + '，已保留已生成部分', 'warn', 6000);
+      return full;
+    }
     console.error(e);
     toast('AI 调用失败：' + aiErrorHint(e, endpoint), 'err', 6000);
     return null;
@@ -2543,91 +2822,8 @@ function askConfirm(title, msg) {
 }
 
 // ===== AI 逐章写作：参照文档中的书籍大纲，一章一章自动续写 =====
-// 中文数字 → 阿拉伯数字（支持 一~九百九十九 与纯数字，如 十=10、二十三=23、一百零五=105；
-// 也兼容大写财务数字 壹贰叁…与 〇，如 第壹章=1、拾二=12——某些 AI 会把「第一章」写成「第壹章」，须能归一化）
-function cnChapterNum(s) {
-  if (/^\d+$/.test(s)) return parseInt(s, 10);
-  const d = { '零': 0, '〇': 0, '一': 1, '壹': 1, '二': 2, '两': 2, '贰': 2, '三': 3, '叁': 3, '四': 4, '肆': 4, '五': 5, '伍': 5, '六': 6, '陆': 6, '七': 7, '柒': 7, '八': 8, '捌': 8, '九': 9, '玖': 9 };
-  let n = 0;
-  const b = s.search(/[百佰]/);
-  if (b !== -1) { n += (d[s[b - 1]] || 1) * 100; s = s.slice(b + 1).replace(/^[零〇]/, ''); }
-  const t = s.search(/[十拾]/);
-  if (t !== -1) { n += (d[s[t - 1]] || 1) * 10; s = s.slice(t + 1); }
-  if (s) n += d[s] || 0;
-  return n > 0 ? n : null;
-}
-
-// 从大纲文本解析章节列表：匹配「第X章」行（容忍 ##/-/1. 等前缀与 **粗体** 装饰），按章号去重排序
-function parseChapterList(text) {
-  const re = /^[^\n]{0,24}?第([零〇一二两三四五六七八九十百\d壹贰叁肆伍陆柒捌玖拾佰]+)章[\s:：·、.．\-—]*([^\n]*)$/gm;
-  const seen = new Set(); const list = [];
-  let m;
-  while ((m = re.exec(text))) {
-    const num = cnChapterNum(m[1]);
-    if (!num || seen.has(num)) continue;
-    seen.add(num);
-    const title = (m[2] || '').replace(/[*_`#]/g, '').replace(/[（(][^）)]*[）)]/g, '').trim();
-    list.push({ num, title, at: m.index });
-  }
-  return list.sort((a, b) => a.num - b.num);
-}
-
-// 已写章节进度：靠生成时插入的 <!-- ai-chapter:N --> 隐形标记判断（预览中不可见；删掉整章即可重写该章）
-function writtenChapterNums(text) {
-  const nums = new Set();
-  const re = /<!--\s*ai-chapter:(\d+)\s*-->/g;
-  let m;
-  while ((m = re.exec(text))) nums.add(parseInt(m[1], 10));
-  return nums;
-}
-
-// 中文数字小值解析（≤99999，支持 千/百/十 组合，如「五千」「一百二」「二十五」）
-function cnSmall(s) {
-  const d = { '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
-  let n = 0;
-  if (s.includes('千')) { const p = s.split('千'); n += (p[0] ? cnSmall(p[0]) : 1) * 1000; s = p[1] || ''; }
-  if (s.includes('百')) { const p = s.split('百'); n += (p[0] ? cnSmall(p[0]) : 1) * 100; s = p[1] || ''; }
-  if (s.includes('十')) { const p = s.split('十'); n += (p[0] ? cnSmall(p[0]) : 1) * 10; s = p[1] || ''; }
-  if (s) n += d[s] || 0;
-  return n;
-}
-
-// 把“X字/X万字/X千字”（阿拉伯或中文数字、支持小数 1.5万、支持链式 1万五千）解析成具体字数
-function parseCountValue(seg) {
-  const unit = { '亿': 1e8, '万': 1e4, '千': 1e3, '百': 1e2, '十': 10 };
-  let total = 0, matched = false;
-  // 阿拉伯：(\d+(?:\.\d+)?)\s*单位?  |  中文：([一二两三四五六七八九十百零]+)单位（单位必选，避免非贪婪丢单位）
-  // 支持链式累加：1万五千 → 1万 + 五千 = 15000
-  const re = /(\d+(?:\.\d+)?)\s*(亿|万|千|百|十)?|([一二两三四五六七八九十百零]+)(亿|万|千|百|十)/g;
-  let m;
-  while ((m = re.exec(seg))) {
-    let num, u = '';
-    if (m[1] !== undefined && m[1] !== '') { num = parseFloat(m[1]); u = m[2] || ''; }
-    else if (m[3] !== undefined && m[3] !== '') { num = cnSmall(m[3]); u = m[4] || ''; }
-    else continue;
-    if (!num || isNaN(num)) continue;
-    total += num * (unit[u] || 1);
-    matched = true;
-  }
-  return matched ? Math.round(total) : null;
-}
-
-// 从文本识别字数目标：优先「字数目标/要求…」语境，否则直接找「数值[万千]?字」；
-// 返回 { count, cmp }（cmp: 'min'=不少于/至少/以上，'approx'=约/默认），未识别返回 null。
-function parseWordCount(text) {
-  if (!text) return null;
-  let m = text.match(/字数[目标要求约]*\s*[:：]?\s*([^\n，。；,.;]{0,20}?字)/);
-  let seg = m ? m[1] : null;
-  if (!seg) {
-    m = text.match(/(?:不少于|至少|≥|大于等于|以上|约|大约)?\s*[0-9一二两三四五六七八九十百千万零]+(?:\.[0-9]+)?\s*[万千]?\s*字/);
-    seg = m ? m[0] : null;
-  }
-  if (!seg) return null;
-  const cmp = /(不少于|至少|≥|大于等于|以上|最少|目标)/.test(text) ? 'min' : 'approx';
-  const count = parseCountValue(seg);
-  if (!count || count < 200) return null; // 过滤噪声
-  return { count, cmp };
-}
+// 章节解析 / 字数目标解析（cnChapterNum / parseChapterList / writtenChapterNums /
+// cnSmall / parseCountValue / parseWordCount）已下沉到 lib/md-core.js，顶部统一解构引用。
 
 const AI_ACTIONS = {
   // 全文总结：流式打字机展示，结束后插入文首
@@ -3983,13 +4179,16 @@ function handleDataAct(act, btn) {
   else if (act === 'layout-reset') resetLayout();
   else if (act === 'bg') openBgDialog();
   else if (act === 'fb-customize') openFbCustomize();
+  else if (act === 'backup-export') exportBackup();
+  else if (act === 'backup-import') importBackup();
+  else if (act === 'diagnostics') showDiagnostics();
 }
 
 // === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===
 // 博客后端地址：如需自托管，仅改这一行即可（与 R2_WORKER_URL 同属「唯一后端耦合点」约定）。
 const BLOG_PUBLISH_URL = 'https://api.yuangs.cc/api/publish';
 const BLOG_TARGETS = ['blog'];
-const BLOG_TITLE_MAX_LEN = 40;
+// BLOG_TITLE_MAX_LEN 由 lib/md-core.js 提供（顶部解构），与 blogSmartCut 同源。
 
 // 默认标签：年月（如 202607）
 function defaultBlogTags() {
@@ -3997,74 +4196,7 @@ function defaultBlogTags() {
   return '' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0');
 }
 
-// 智能截断为标题：优先按句号/问号/感叹号/换行截断，再按长度截断
-function blogSmartCut(str, maxLen) {
-  const s = str.replace(/\s+/g, ' ').trim();
-  const idx = [
-    s.indexOf('。'), s.indexOf('！'), s.indexOf('？'),
-    s.indexOf('. '), s.indexOf('! '), s.indexOf('? '), s.indexOf('\n')
-  ].filter(i => i >= 0);
-  const punct = idx.length ? Math.min(...idx) : -1;
-  let cut = punct >= 0 ? s.slice(0, punct) : s;
-  if (cut.length > maxLen) cut = cut.slice(0, maxLen);
-  return cut || 'Untitled';
-}
-
-// 解析 YAML Front Matter 与标题（优先 front matter → 第一个 H1 → 正文智能截断）
-function parseBlogMeta(markdown) {
-  markdown = markdown.replace(/\r\n?/g, '\n'); // 归一化 Windows 行尾，使 Front Matter 正则可匹配
-  const meta = {};
-  let body = markdown;
-  const fm = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (fm) {
-    body = markdown.slice(fm[0].length);
-    fm[1].split(/\r?\n/).forEach(line => {
-      const m = line.match(/^([^:#\s][^:]*):\s*(.*)$/);
-      if (m) {
-        const k = m[1].trim().toLowerCase();
-        let v = m[2].trim();
-        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-        if (k === 'tags') {
-          try { meta.tags = v.startsWith('[') ? JSON.parse(v.replace(/'/g, '"')) : v.split(',').map(s => s.trim()).filter(Boolean); }
-          catch (_) {
-            // 兜底：兼容 YAML 流序列 [a, b]（未加引号）这种常见写法
-            const raw = v.trim();
-            meta.tags = (raw.startsWith('[') && raw.endsWith(']'))
-              ? raw.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean)
-              : v.split(',').map(s => s.trim()).filter(Boolean);
-          }
-        } else { meta[k] = v; }
-      }
-    });
-  }
-  let title = meta.title;
-  if (!title) {
-    const h1 = body.match(/^\s{0,3}#\s+(.+?)\s*$/m);
-    if (h1) title = h1[1].trim();
-  }
-  if (!title) {
-    const firstNonEmptyLine = body.split(/\r?\n/).find(l => l.trim().length > 0) || '';
-    title = blogSmartCut(firstNonEmptyLine, BLOG_TITLE_MAX_LEN);
-  } else if (title.length > BLOG_TITLE_MAX_LEN) {
-    title = blogSmartCut(title, BLOG_TITLE_MAX_LEN);
-  }
-  return { title: title || 'Untitled', tags: Array.isArray(meta.tags) ? meta.tags : [], body };
-}
-
-// Markdown 转纯文本（content 字段）
-function blogMdToPlain(markdown) {
-  return markdown
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`+/g, '')
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    .replace(/!\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
-    .replace(/(\*\*|__|\*|_)/g, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
+// blogSmartCut / parseBlogMeta / blogMdToPlain 已下沉到 lib/md-core.js（含单测）。
 
 async function blogPostJSON(url, json, extraHeaders, timeoutMs) {
   const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -4262,8 +4394,10 @@ function fileToDataURL(file) {
 }
 function insertAtCursor(text) {
   const s = editor.selectionStart, e = editor.selectionEnd;
-  editor.value = editor.value.slice(0, s) + text + editor.value.slice(e);
+  const next = editor.value.slice(0, s) + text + editor.value.slice(e);
   const pos = s + text.length;
+  pushUndo('插入内容');                        // 图片 / 播客 / AI 结果插入也可 Ctrl+Z 撤回
+  editor.value = next;
   editor.selectionStart = editor.selectionEnd = pos;
   editor.dispatchEvent(new Event('input'));   // 触发 afterChange（渲染 / 统计 / 草稿）
   editor.focus();
@@ -4364,6 +4498,7 @@ const SHORTCUTS = new Map([
   ['mod+shift+t', () => applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3])],
   ['mod+f', () => TEXT_ACTIONS.searchReplace()],
   ['mod+alt+v', nextView],
+  ['mod+alt+shift+d', showDiagnostics],   // 诊断信息（真机上排查问题用）
   // 格式
   ['mod+b', () => FORMAT_ACTIONS.fmtBold()],
   ['mod+i', () => FORMAT_ACTIONS.fmtItalic()],
@@ -4381,6 +4516,21 @@ const SHORTCUTS = new Map([
   ['mod+6', () => FORMAT_ACTIONS.fmtH6()],
 ]);
 document.addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return;   // 输入法组合中不抢键
+
+  // —— 撤销 / 重做 ——
+  // 只在「焦点在编辑器或页面本身」且我们有自己的快照时才接管；
+  // 否则放行给浏览器原生 undo（普通打字场景仍由浏览器维护）。
+  const mod = e.ctrlKey || e.metaKey;
+  const inOurEditor = document.activeElement === editor || document.activeElement === document.body;
+  if (mod && !e.altKey && inOurEditor) {
+    const k0 = (e.key || '').toLowerCase();
+    const isUndo = k0 === 'z' && !e.shiftKey;
+    const isRedo = (k0 === 'y' && !e.shiftKey) || (k0 === 'z' && e.shiftKey);
+    if (isUndo && undoStack.length) { e.preventDefault(); undoStep(); return; }
+    if (isRedo && redoStack.length) { e.preventDefault(); redoStep(); return; }
+  }
+
   const parts = [];
   if (e.ctrlKey || e.metaKey) parts.push('mod');
   if (e.altKey) parts.push('alt');
@@ -4458,10 +4608,23 @@ if ('serviceWorker' in navigator) {
 
       // 后台探测新版本：长期驻留的标签页也能及时发现部署更新并弹出更新条
       // （仅提示，不自动刷新；用户主动点击「立即刷新」才重载）。
-      const pullUpdate = () => { try { reg.update().catch(() => {}); } catch (_) {} };
+      /* 后台探测新版本：只在页面可见时轮询，且用指数退避（60s → 2m → 5m 封顶）。
+         旧实现无条件 setInterval 60s，标签页挂一天就是 1000+ 次请求。 */
+      let updateDelay = 60000;
+      let updateTimer = 0;
+      const pullUpdate = () => {
+        if (document.visibilityState === 'visible') { try { reg.update().catch(() => {}); } catch (_) {} }
+        clearTimeout(updateTimer);
+        updateTimer = setTimeout(pullUpdate, updateDelay);
+        updateDelay = Math.min(updateDelay * 2, 300000);
+      };
       pullUpdate();
-      window.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pullUpdate(); });
-      setInterval(pullUpdate, 60000);
+      window.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        updateDelay = 60000;          // 回到前台重置退避，尽快发现新版本
+        clearTimeout(updateTimer);
+        pullUpdate();
+      });
     }).catch(() => {});
   });
 
@@ -4513,11 +4676,23 @@ const LIB_DB = 'md-library';
 const LIB_STORE = 'docs';
 let libDb = null;
 
+/* 存储分层（DB v3）：
+ *   docs      —— 文档元信息 + 正文（**不再携带 history**，列表读取不再被历史快照拖慢）
+ *   images    —— 图片 Blob（正文只存 libimg://<id>）
+ *   history   —— 版本快照，独立仓库 + byDoc 索引（原先内嵌在 doc.history 里，
+ *                每次回写都要连 20 条快照一起读写，单次最大可达数 MB）
+ *   positions —— 阅读位置（几十字节的小记录，不再为存一个浮点数重写整篇文档）
+ *   drafts    —— 大文档草稿（>1MB 时替代 localStorage，避免 5MB 配额与同步写卡顿）
+ * 兼容策略：升级只「新建仓库」，不破坏性迁移旧数据；旧的 doc.history 由 readHistory()
+ * 兜底读取，并在下次回写时自然淡出（写库时 strip 掉 history 字段）。
+ */
+const DB_VERSION = 3;
+
 function openLibDb() {
   return new Promise((resolve, reject) => {
     if (libDb) return resolve(libDb);
     if (!('indexedDB' in window)) return reject(new Error('IndexedDB 不可用'));
-    const req = indexedDB.open(LIB_DB, 2);
+    const req = indexedDB.open(LIB_DB, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(LIB_STORE)) {
@@ -4525,6 +4700,16 @@ function openLibDb() {
       }
       if (!db.objectStoreNames.contains('images')) {
         db.createObjectStore('images', { keyPath: 'id' });   // 图片 Blob 单独入库，正文只存 libimg://<id>
+      }
+      if (!db.objectStoreNames.contains('history')) {
+        const hs = db.createObjectStore('history', { keyPath: 'hid' });
+        hs.createIndex('byDoc', 'docId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains('positions')) {
+        db.createObjectStore('positions', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('drafts')) {
+        db.createObjectStore('drafts', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => {
@@ -4563,6 +4748,53 @@ const idbGetImage = (id) => idbReq(() => imgStore('readonly').get(id));
 const idbPutImage = (rec) => idbReq(() => imgStore('readwrite').put(rec));
 const idbGetAllImageKeys = () => idbReq(() => imgStore('readonly').getAllKeys());
 const idbDeleteImage = (id) => idbReq(() => imgStore('readwrite').delete(id));
+
+/* ---- 版本历史仓库（独立，避免每次回写带着 20 条快照全量读写） ---- */
+const HISTORY_STORE = 'history';
+function historyStore(mode) { return libDb.transaction(HISTORY_STORE, mode).objectStore(HISTORY_STORE); }
+const idbAddHistory = (rec) => idbReq(() => historyStore('readwrite').put(rec));
+const idbDeleteHistory = (hid) => idbReq(() => historyStore('readwrite').delete(hid));
+
+// 读取某文档的全部快照（按时间升序）。兼容旧数据：history 仓库为空时回退读 doc.history。
+async function readHistory(docId) {
+  if (!libDb) return [];
+  let list = [];
+  try {
+    const idx = historyStore('readonly').index('byDoc');
+    list = await idbReq(() => idx.getAll(IDBKeyRange.only(docId)));
+  } catch (_) { list = []; }
+  if (list.length) return list.sort((a, b) => a.at - b.at);
+  try {
+    const doc = await idbGet(docId);            // 旧版本数据兜底
+    if (doc && Array.isArray(doc.history) && doc.history.length) {
+      return doc.history.map((h, i) => ({ ...h, hid: docId + '@legacy-' + i, docId }));
+    }
+  } catch (_) {}
+  return [];
+}
+
+// 同一个 hid 覆盖写；保留最近 HISTORY_KEEP 条
+const HISTORY_KEEP = 20;
+async function trimHistory(docId) {
+  try {
+    const list = await readHistory(docId);
+    const own = list.filter((h) => h.hid && h.hid.indexOf('@legacy-') < 0);
+    const extra = own.length - HISTORY_KEEP;
+    for (let i = 0; i < extra; i++) await idbDeleteHistory(own[i].hid);
+  } catch (_) {}
+}
+
+/* ---- 阅读位置仓库（小记录，独立读写） ---- */
+const POS_STORE = 'positions';
+function posStore(mode) { return libDb.transaction(POS_STORE, mode).objectStore(POS_STORE); }
+const idbPutPosition = (rec) => idbReq(() => posStore('readwrite').put(rec));
+const idbGetPosition = (id) => idbReq(() => posStore('readonly').get(id));
+
+/* ---- 大文档草稿仓库 ---- */
+const DRAFT_STORE = 'drafts';
+function draftStore(mode) { return libDb.transaction(DRAFT_STORE, mode).objectStore(DRAFT_STORE); }
+const idbPutDraft = (rec) => idbReq(() => draftStore('readwrite').put(rec));
+const idbGetDraft = (id) => idbReq(() => draftStore('readonly').get(id));
 
 // === SECTION: 孤儿图片 GC（Orphan Images Garbage Collection） ===
 // 痛点：粘贴/拖拽图片时 Blob 永久写入 images 仓库；若正文删掉 ![..](libimg://id)
@@ -4756,11 +4988,7 @@ function fmtTime(ts) {
 }
 
 // HTML 转义（正文可能含 < & " 等，防止注入并正确显示）
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
-}
+// escapeHtml 已下沉到 lib/md-core.js（参数校验更严：null/undefined → ''）。
 
 // 从正文中截取包含关键词的上下文片段，并高亮命中词。返回安全的 HTML 串。
 // 仅在调用方已确认正文命中（indexOf >= 0）时使用。
@@ -4900,6 +5128,7 @@ function openLibDocData(doc) {
   currentName = doc.name || '未命名.md';
   currentNameIsAuto = !!doc.autoName;
   editor.value = doc.content || '';
+  resetUndo();
   localStorage.setItem('md-lib-current', doc.id);
   updateFileName();
   afterChange({ skipWriteback: true });   // 打开即载入，不应刷新更新时间
@@ -4962,6 +5191,12 @@ async function deleteLibDoc(id) {
   const doc = await idbGet(id).catch(() => null);
   if (!(await askConfirm('删除文档', '删除「' + (doc ? doc.name : '该文档') + '」？此操作不可恢复。'))) return;
   try { await idbDelete(id); } catch (_) {}
+  // 连同该文档的版本快照与阅读位置一起清理，避免 history / positions 仓库残留孤儿记录
+  try {
+    const snaps = await readHistory(id);
+    for (const h of snaps) if (h.hid && h.hid.indexOf('@legacy-') < 0) await idbDeleteHistory(h.hid);
+  } catch (_) {}
+  try { await idbReq(() => posStore('readwrite').delete(id)); } catch (_) {}
   if (id === currentLibId) {
     currentLibId = null;
     localStorage.removeItem('md-lib-current');
@@ -4969,10 +5204,12 @@ async function deleteLibDoc(id) {
     currentName = '未命名.md';
     currentNameIsAuto = false;
     editor.value = '';
+    resetUndo();
     localStorage.removeItem('md-draft');   // 清掉旧草稿，避免删除后内容在重载时复活
     localStorage.removeItem('md-name');
+    localStorage.removeItem('md-draft-ts');
     updateFileName();
-    renderMarkdown(); updateStats(); updateGutter(); updatePos();   // 刷新空视图（不触发草稿写入）
+    renderMarkdown({ force: true }); updateStats(); updateGutter(); updatePos();   // 刷新空视图（不触发草稿写入）
     setSaveState('', '就绪');
   }
   renderLibrary();
@@ -5032,28 +5269,46 @@ if (libFileInput) {
 }
 
 /* 自动回写：打开文库文档后，每次编辑去抖写入 IndexedDB，并保留版本历史 */
-const MAX_HISTORY = 20;
-const MAX_HISTORY_SNAPSHOT = 200000;   // 历史快照单条内容上限 200KB：大文档不整文存 20 份（1MB×20=21MB 全量读写），超限存截断快照
+const MAX_HISTORY_SNAPSHOT = 200000;   // 历史快照单条内容上限 200KB（超大文档只存前 200KB 并标记 truncated）
 const writebackLibDebounced = debounce(() => { writebackLib(); }, 800);
+
+/* 记录一条历史快照（策略在 md-core.shouldSnapshot，有单测）：
+ *   - 至少间隔 5 分钟，或长度变化 ≥5% 才留档 → 快照真正覆盖「不同阶段」而非最近几分钟的近似副本
+ *   - 快照独立存进 history 仓库，正文写入不再携带它（原先单次写入最多要连 20×200KB 一起搬）
+ */
+async function snapshotHistory(docId, content) {
+  try {
+    const list = await readHistory(docId);
+    const last = list[list.length - 1];
+    if (!last) { /* 首版必存 */ }
+    else if (!shouldSnapshot({ lastAt: last.at, prevLen: last.len || (last.content || '').length, newLen: content.length })) return;
+
+    const at = Date.now();
+    const overLimit = content.length > MAX_HISTORY_SNAPSHOT;
+    await idbAddHistory({
+      hid: docId + '@' + at,
+      docId,
+      at,
+      len: content.length,
+      summary: content.slice(0, 200) + (content.length > 200 ? '…' : ''),
+      content: overLimit ? content.slice(0, MAX_HISTORY_SNAPSHOT) : content,
+      truncated: overLimit,
+    });
+    await trimHistory(docId);
+  } catch (_) { /* 快照失败不影响正文保存 */ }
+}
+
 function writebackLib() {
   if (!currentLibId || !libDb) return;
   ensureNameFromContent();          // 未命名文库文档：首次编辑即按首行自动命名
   const newContent = editor.value;
   idbGet(currentLibId).then((oldDoc) => {
-    const history = (oldDoc && oldDoc.history) || [];
-    // 内容未变：仅更新时间戳，不记快照（避免空转刷屏历史）
-    if (oldDoc && oldDoc.content === newContent) {
-      return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto, scrollRatio: (oldDoc && oldDoc.scrollRatio) || 0, lastReadAt: (oldDoc && oldDoc.lastReadAt) || null });
-    }
-    const overLimit = newContent.length > MAX_HISTORY_SNAPSHOT;
-    history.push({
-      at: Date.now(),
-      summary: newContent.slice(0, 200) + (newContent.length > 200 ? '…' : ''),
-      content: overLimit ? newContent.slice(0, MAX_HISTORY_SNAPSHOT) : newContent,
-      truncated: overLimit,   // 大文档仅存前 200KB，恢复时提示不完整
-    });
-    if (history.length > MAX_HISTORY) history.shift();   // 只留最近 20 条
-    return idbPut({ id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(), history, autoName: currentNameIsAuto, scrollRatio: (oldDoc && oldDoc.scrollRatio) || 0, lastReadAt: (oldDoc && oldDoc.lastReadAt) || null });
+    const changed = !(oldDoc && oldDoc.content === newContent);
+    // 正文与元信息一次写入；历史字段在此自然淡出（旧数据结构里的 doc.history 不再被复制）
+    return idbPut({
+      id: currentLibId, name: currentName, content: newContent, updatedAt: Date.now(),
+      autoName: currentNameIsAuto,
+    }).then(() => (changed ? snapshotHistory(currentLibId, newContent) : null));
   }).then(() => {
     setSaveState('saved', '✓ 已存文库');
     const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
@@ -5065,30 +5320,34 @@ function writebackLib() {
 /* 版本历史弹窗：列出快照，选择后恢复（截断其后历史，符合 Git 恢复逻辑） */
 async function showHistoryModal(docId) {
   const doc = await idbGet(docId).catch(() => null);
-  if (!doc || !doc.history || !doc.history.length) {
+  const snaps = await readHistory(docId).catch(() => []);
+  if (!doc || !snaps.length) {
     flash('该文档暂无历史版本');
     return;
   }
-  const list = doc.history.map((h, i) =>
-    `${i + 1}. ${new Date(h.at).toLocaleString('zh-CN')} - ${h.summary}`
+  const list = snaps.map((h, i) =>
+    `${i + 1}. ${new Date(h.at).toLocaleString('zh-CN')} - ${h.summary}${h.truncated ? '（截断）' : ''}`
   ).join('\n');
-  const choice = await askInput(`选择要恢复的版本（输入编号 1-${doc.history.length}）：`, { desc: list });
+  const choice = await askInput(`选择要恢复的版本（输入编号 1-${snaps.length}）：`, { desc: list });
   const idx = parseInt(choice, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= doc.history.length) return;
-  const target = doc.history[idx];
+  if (isNaN(idx) || idx < 0 || idx >= snaps.length) return;
+  const target = snaps[idx];
   if (target.truncated) toast('⚠️ 该版本为大文档截断快照（仅含前 200KB），恢复后内容不完整', 'info', 6000);
   if (!(await askConfirm('恢复版本', `恢复至 ${new Date(target.at).toLocaleString('zh-CN')} 的版本？当前内容将被覆盖。`))) return;
 
+  pushUndo('恢复历史版本');                          // 误点恢复也能 Ctrl+Z 撤回
   editor.value = target.content;
   currentName = doc.name;
   currentNameIsAuto = false;
   currentLibId = docId;
   currentFileHandle = null;
   updateFileName();
-  doc.history = doc.history.slice(0, idx + 1);   // 截断：被恢复版本之后的历史丢弃
-  doc.content = target.content;
-  doc.updatedAt = Date.now();
-  await idbPut(doc);
+  // 截断：被恢复版本之后的历史丢弃（符合 Git 恢复语义），且只删快照，不动正文
+  const later = snaps.slice(idx + 1).filter((h) => h.hid && h.hid.indexOf('@legacy-') < 0);
+  for (const h of later) await idbDeleteHistory(h.hid).catch(() => {});
+  const nextDoc = { ...doc, content: target.content, updatedAt: Date.now() };
+  delete nextDoc.history;                       // 历史已迁到独立仓库，别把这个字段继续写回去
+  await idbPut(nextDoc);
   afterChange({ skipWriteback: true });
   renderLibrary();
   flash('已恢复至历史版本');
@@ -5422,6 +5681,7 @@ function replaceTextSafely(start, end, newText, caretPos) {
   let ok = false;
   try { ok = document.execCommand('insertText', false, newText); } catch (_) { ok = false; }
   if (!ok) {
+    pushUndo('Vim 编辑');                     // execCommand 不可用时退回手动改写，需自行补撤销点
     editor.setRangeText(newText, start, end, 'end');
     editor.dispatchEvent(new Event('input'));
   }
@@ -5628,7 +5888,9 @@ window.addEventListener('storage', (e) => {
   }
 });
 
-// === 全局错误兜底：未捕获异常 / 未处理 rejection 不再静默吞掉，toast 提示（带防刷屏） ===
+// === SECTION: 错误日志环形缓冲（让用户在真机上也能自证问题） ===
+// 旧实现用 preventDefault() 把所有 rejection 吞掉，只闪一次 toast：
+// 用户报「出问题了」时既看不到细节，也没法取证。这里保留最近 50 条，可一键复制。
 let lastErrToastAt = 0;
 function toastGlobalErr(msg) {
   const now = Date.now();
@@ -5636,9 +5898,274 @@ function toastGlobalErr(msg) {
   lastErrToastAt = now;
   toast('⚠️ ' + msg, 'err', 5000);
 }
-window.addEventListener('error', (e) => { toastGlobalErr((e && e.message) || '未知脚本错误'); });
+
+const ERR_LOG_MAX = 50;
+const errLog = [];
+function logError(kind, msg, extra) {
+  errLog.push({ at: new Date().toISOString(), kind, msg: String(msg || '').slice(0, 500), extra: extra ? String(extra).slice(0, 500) : '' });
+  if (errLog.length > ERR_LOG_MAX) errLog.shift();
+}
+window.addEventListener('error', (e) => {
+  logError('error', (e && e.message) || '未知脚本错误', e && e.filename ? e.filename + ':' + e.lineno : '');
+  toastGlobalErr((e && e.message) || '未知脚本错误');
+});
 window.addEventListener('unhandledrejection', (e) => {
-  if (e && e.preventDefault) e.preventDefault();
   const r = e && e.reason;
+  logError('rejection', (r && r.message) || String(r || '未处理 Promise 错误'), r && r.stack);
+  if (e && e.preventDefault) e.preventDefault();
   toastGlobalErr((r && r.message) || String(r || '未处理 Promise 错误'));
 });
+
+// 诊断信息：Ctrl/Cmd + Alt + Shift + D，或「⋯ → 🩺 诊断信息」
+function diagnosticsText() {
+  let storage = 'n/a';
+  try {
+    let ls = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      ls += (k.length + String(localStorage.getItem(k) || '').length) * 2;
+    }
+    storage = humanBytes(ls);
+  } catch (_) {}
+  const ua = navigator.userAgent;
+  return [
+    '# mdviewer 诊断信息',
+    '',
+    '- 版本：' + APP_VERSION,
+    '- 时间：' + new Date().toLocaleString('zh-CN'),
+    '- 页面：' + location.href,
+    '- 视口：' + window.innerWidth + '×' + window.innerHeight + '（dpr ' + (window.devicePixelRatio || 1) + '）',
+    '- 视图模式：' + viewMode + ' · 换行：' + (wrapMode ? '开' : '关') + ' · Vim：' + (isVimMode ? '开' : '关'),
+    '- 文档：' + (currentName || '') + '（' + countWords(editor.value).words + ' 字）' + (currentLibId ? ' · 文库' : ''),
+    '- 文库：' + (libDocsCache ? libDocsCache.length + ' 篇' : '未加载') + ' · localStorage 占用 ' + storage,
+    '- 库版本：md-core ' + (Core ? '已加载' : '缺失') + ' · SW ' + (navigator.serviceWorker && navigator.serviceWorker.controller ? '已接管' : '未接管'),
+    '- UA：' + ua,
+    '',
+    '## 最近错误（' + errLog.length + ' 条）',
+    errLog.length ? errLog.map((x) => '- [' + x.at + '] ' + x.kind + '：' + x.msg + (x.extra ? '\n  ' + x.extra : '')).join('\n') : '（无）',
+  ].join('\n');
+}
+
+let diagModalEl = null;
+function showDiagnostics() {
+  const text = diagnosticsText();
+  if (!diagModalEl) {
+    diagModalEl = document.createElement('div');
+    diagModalEl.id = 'diagModal';
+    diagModalEl.className = 'modal';
+    diagModalEl.hidden = true;          // 必须初始隐藏：观察的是 hidden 属性「变化」
+    diagModalEl.innerHTML =
+      '<div class="modal-box" role="dialog" aria-modal="true" aria-label="诊断信息">' +
+        '<div class="modal-title">🩺 诊断信息</div>' +
+        '<p class="modal-desc">反馈问题时附上这段文本，能省掉一半排查时间。</p>' +
+        '<textarea id="diagText" class="share-url" readonly spellcheck="false" rows="14"></textarea>' +
+        '<div class="modal-actions">' +
+          '<button type="button" id="diagCopy">复制</button>' +
+          '<button type="button" id="diagClose" data-modal-close class="primary">关闭</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(diagModalEl);
+    diagModalEl.querySelector('#diagClose').addEventListener('click', () => { diagModalEl.hidden = true; });
+    diagModalEl.querySelector('#diagCopy').addEventListener('click', async () => {
+      const t = diagModalEl.querySelector('#diagText');
+      t.select();
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(t.value);
+        else fallbackCopy(t.value);
+        toast('已复制诊断信息', 'ok');
+      } catch (_) { fallbackCopy(t.value); }
+    });
+    diagModalEl.addEventListener('click', (e) => { if (e.target === diagModalEl) diagModalEl.hidden = true; });
+    enhanceModal(diagModalEl);          // 动态元素也要接入焦点陷阱
+  }
+  diagModalEl.querySelector('#diagText').value = text;
+  diagModalEl.hidden = false;
+}
+
+// === SECTION: 弹窗可访问性（焦点陷阱 + 背景 inert + 焦点归还） ===
+// 12 个弹窗原先各写各的 Esc，且 Tab 能跑到背景上去。这里用「统一观察 hidden 属性」的
+// 方式一次性接管，避免逐个改动 12 处调用点（低风险、全覆盖）。
+const modalStack = [];
+const modalReturnFocus = new WeakMap();
+
+function modalFocusables(m) {
+  return Array.from(m.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'))
+    .filter((el) => el.offsetParent !== null || el === document.activeElement);
+}
+
+function onModalOpen(m) {
+  modalStack.push(m);
+  modalReturnFocus.set(m, document.activeElement);
+  const appEl = document.querySelector('.app');
+  if (appEl) appEl.inert = true;               // 背景不可聚焦（Chrome/Safari/FF 均支持）
+  const box = m.querySelector('.modal-box') || m;
+  if (!box.hasAttribute('tabindex')) box.setAttribute('tabindex', '-1');
+  const first = modalFocusables(m)[0];
+  (first || box).focus({ preventScroll: true });
+}
+
+function onModalClose(m) {
+  const i = modalStack.indexOf(m);
+  if (i >= 0) modalStack.splice(i, 1);
+  if (!modalStack.length) {
+    const appEl = document.querySelector('.app');
+    if (appEl) appEl.inert = false;
+    const prev = modalReturnFocus.get(m);
+    if (prev && prev.focus && document.contains(prev)) prev.focus({ preventScroll: true });
+  }
+}
+
+function enhanceModal(m) {
+  let wasHidden = m.hidden;
+  new MutationObserver(() => {
+    if (wasHidden && !m.hidden) onModalOpen(m);
+    else if (!wasHidden && m.hidden) onModalClose(m);
+    wasHidden = m.hidden;
+  }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+}
+
+function enhanceModals() {
+  document.querySelectorAll('.modal').forEach(enhanceModal);
+}
+
+// Tab 在弹窗内循环；Esc 落到最上层弹窗的「取消/关闭」按钮上兜底
+document.addEventListener('keydown', (e) => {
+  if (!modalStack.length) return;
+  const top = modalStack[modalStack.length - 1];
+  if (e.key === 'Escape' && !e.defaultPrevented) {
+    // 只走「点关闭按钮」这条路：强行 hidden 会让 askConfirm/askInput 的 Promise 永远挂起。
+    // 没有统一关闭按钮的弹窗（少数）交回给它自己的 keydown 处理。
+    const closer = top.querySelector(
+      '[data-modal-close],#aiSettingsCancel,#fbCustClose,#qcmClose,#bgClose,#tsClose,' +
+      '#shareClose,#blogClose,#imaClose,#confirmModalCancel,#promptModalCancel'
+    );
+    if (closer) { e.preventDefault(); closer.click(); }
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const items = modalFocusables(top);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}, true);
+
+// === SECTION: 菜单键盘导航（role=menu 应支持上下键，而不是只能 Tab） ===
+document.addEventListener('keydown', (e) => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+  const menu = document.activeElement && document.activeElement.closest
+    ? document.activeElement.closest('[role="menu"]')
+    : null;
+  if (!menu || menu.hidden) return;
+  const items = Array.from(menu.querySelectorAll('button[role="menuitem"],button:not([hidden])'))
+    .filter((b) => !b.disabled && b.offsetParent !== null);
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  let next = 0;
+  if (e.key === 'ArrowDown') next = i < 0 ? 0 : (i + 1) % items.length;
+  else if (e.key === 'ArrowUp') next = i <= 0 ? items.length - 1 : i - 1;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = items.length - 1;
+  e.preventDefault();
+  items[next].focus();
+}, true);
+
+// === SECTION: 全库备份 / 恢复（IndexedDB 是唯一副本，清站点数据即全丢） ===
+// ZIP 读写实现在 lib/md-core.js（zipStore / unzipStore），零依赖且已单测。
+function backupFileName() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return 'mdviewer-backup-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.zip';
+}
+
+async function exportBackup() {
+  try {
+    await openLibDb();
+    if (!libDb) { toast('本地库不可用，无法备份', 'err'); return; }
+    const docs = await idbGetAll();
+    const keys = await idbGetAllImageKeys();
+    if (!docs.length) { toast('文库为空，无需备份', 'info'); return; }
+    toast('正在打包 ' + docs.length + ' 篇文档…', 'info');
+
+    const enc = new TextEncoder();
+    const files = [];
+    const manifest = { app: 'mdviewer', version: APP_VERSION, exportedAt: new Date().toISOString(), docs: docs.length, images: keys.length };
+    files.push({ name: 'manifest.json', data: enc.encode(JSON.stringify(manifest, null, 2)) });
+
+    for (const d of docs) {
+      const body = d.content || '';
+      files.push({ name: 'docs/' + d.id + '.md', data: enc.encode(body) });
+      const snaps = (await readHistory(d.id).catch(() => [])).map((h) => ({ at: h.at, summary: h.summary, truncated: !!h.truncated }));
+      const meta = {
+        id: d.id, name: d.name || '未命名.md', updatedAt: d.updatedAt || null,
+        autoName: !!d.autoName, history: snaps,
+      };
+      files.push({ name: 'docs/' + d.id + '.json', data: enc.encode(JSON.stringify(meta, null, 2)) });
+    }
+    for (const id of keys) {
+      try {
+        const rec = await idbGetImage(id);
+        if (rec && rec.blob) files.push({ name: 'images/' + id, data: new Uint8Array(await rec.blob.arrayBuffer()) });
+      } catch (_) {}
+    }
+    const zip = zipStore(files);
+    download(backupFileName(), zip, 'application/zip');
+    toast('✅ 已导出备份：' + docs.length + ' 篇 / ' + humanBytes(zip.length), 'ok', 5000);
+  } catch (e) {
+    toast('备份失败：' + (e.message || e), 'err', 6000);
+  }
+}
+
+const backupFileInput = document.createElement('input');
+backupFileInput.type = 'file';
+backupFileInput.accept = '.zip,application/zip';
+backupFileInput.hidden = true;
+document.body.appendChild(backupFileInput);
+
+backupFileInput.addEventListener('change', async () => {
+  const f = backupFileInput.files && backupFileInput.files[0];
+  backupFileInput.value = '';
+  if (!f) return;
+  try {
+    await openLibDb();
+    const entries = await unzipStore(new Uint8Array(await f.arrayBuffer()));
+    const byName = new Map(entries.map((e) => [e.name, e.data]));
+    const dec = new TextDecoder();
+    const docIds = entries
+      .map((e) => e.name)
+      .filter((n) => /^docs\/.+\.md$/.test(n))
+      .map((n) => n.slice(5, -3));
+    if (!docIds.length) { toast('备份里没有找到文档', 'warn'); return; }
+    if (!(await askConfirm('从备份恢复', '将导入 ' + docIds.length + ' 篇文档（同名 id 会被覆盖，不会删除现有文档）。继续？'))) return;
+
+    let ok = 0;
+    for (const id of docIds) {
+      const body = dec.decode(byName.get('docs/' + id + '.md'));
+      let meta = {};
+      try { meta = JSON.parse(dec.decode(byName.get('docs/' + id + '.json'))); } catch (_) {}
+      await idbPut({
+        id, name: meta.name || id + '.md', content: body,
+        updatedAt: meta.updatedAt || Date.now(), autoName: !!meta.autoName,
+      });
+      ok++;
+    }
+    let imgs = 0;
+    for (const [name, data] of byName) {
+      if (!name.startsWith('images/')) continue;
+      try {
+        await idbPutImage({ id: name.slice(7), name: name.slice(7), type: 'application/octet-stream', blob: new Blob([data]) });
+        imgs++;
+      } catch (_) {}
+    }
+    await renderLibrary();
+    toast('✅ 已恢复 ' + ok + ' 篇文档 / ' + imgs + ' 张图片', 'ok', 6000);
+  } catch (e) {
+    toast('恢复失败：' + (e.message || e), 'err', 6000);
+  }
+});
+
+// 统一入口：菜单 / 快捷键
+function importBackup() { backupFileInput.click(); }
+
+// 启动时挂载弹窗增强
+enhanceModals();

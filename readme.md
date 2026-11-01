@@ -30,6 +30,10 @@
 * **安全草稿箱**：内置防丢失机制，通过 `localStorage` 实时静默保存未提交的草稿，意外关闭网页也不怕 [app.js]。
 * **丰富导出能力**：支持一键复制 HTML、导出 `.html` 文件，或者直接**一键打印/导出为精美 PDF** [app.js]。
 
+### 2.5 ↩️ 可靠的撤销栈
+* 程序化改写（**全部替换、AI 应用、中英排版、插入图片**）之后，`Ctrl+Z` / `Ctrl+Shift+Z` 依然有效。
+* 原生输入仍交给浏览器自己的撤销栈；切换文档时自动重置，不会把 A 文档的快照套到 B 文档上。
+
 ### 3. 🎨 极简美学与全功能写作辅助
 * **主题自由切换**：支持“自动（跟随系统）”、“明亮白（Light）”与“深邃黑（Dark）”一键切换 [app.js]。
 * **正文外观自定义**：右上角「⋯ → 🌗 主题设置 → 🔠 正文字号与颜色」可实时调整预览正文的**字号（12–32 px）**与**字体颜色**（预设色板 + 取色器），设置保存在本机、导出 HTML 时自动沿用；不修改 Markdown 源文件 [app.js]。
@@ -46,6 +50,15 @@
 * **端点写死**：前端只需写死一个代理端点（`app.js` 里的 `IMA_PROXY_URL`），与 `BLOG_PUBLISH_URL` / `R2_WORKER_URL` 同属「唯一后端耦合点」约定。若代理部署到别处，改这一行即可（需与代理同步）。
 * **与「发布到博客」互补**：博客用于公开分享，IMA 用于私有笔记沉淀，二者互不影响。
 
+### 6. 🗄️ 全库备份与恢复
+* 「⋯ → **🗄️ 备份全库（.zip）**」把整个文库（正文 + 元信息 + 图片 Blob）打包成 zip 下载。
+* 「📥 从备份恢复」可直接导入：同名 id 覆盖，不删除现有文档。
+* ZIP 读写是零依赖自研实现（`lib/md-core.js` 的 `zipStore` / `unzipStore`），支持 store 与 deflate。
+
+### 7. 🩺 诊断与可观测
+* `Ctrl + Alt + Shift + D`（或「⋯ → 🩺 诊断信息」）一键导出：版本、视口、文库统计、存储占用、最近 50 条错误。
+* 页面与脚本版本不一致（SW 缓存错位）时会主动提示强刷，而不是让你对着「点了没反应」猜。
+
 ---
 
 ## 🚀 快速上手指南
@@ -54,6 +67,8 @@
    * `Ctrl + S` / `Cmd + S`：保存文件
    * `Ctrl + O` / `Cmd + O`：打开本地 Markdown 文件
    * `Ctrl + Alt + N`：新建文档
+   * `Ctrl + Z` / `Ctrl + Shift + Z`：撤销 / 重做（含程序化改写）
+   * `Ctrl + Alt + Shift + D`：诊断信息
 2. **格式排版**：支持标准的 GFM（GitHub Flavored Markdown）语法，包括表格、任务列表、代码块高亮等。
 
 ---
@@ -82,3 +97,29 @@ print(calculate_words("Hello Markdown!"))
 
 > **“开始你的极简写作之旅吧……”** 
 > 💡 *提示：你可以随时点击右上角的 `...` 菜单按钮导出你的文档或切换主题！*
+
+---
+
+## 🧪 工程与测试（v4.8）
+
+项目仍然保持**零构建、零运行时依赖**，但不再「只能靠手测」：
+
+| 层 | 位置 | 说明 |
+|---|---|---|
+| 纯函数内核 | `lib/md-core.js` | 标题 slug / 行偏移 / 字数 / 章节解析 / 博客元数据 / AI SSE 解析 / 正则安全 / ZIP 读写。**不碰 DOM**，浏览器挂 `window.MdCore`，Node 里 `require` 即可 |
+| 正则线程 | `lib/md-regex-worker.js` | 用户输入的正则放进 Worker 跑，超时直接 `terminate()`——ReDoS 只会中断，不会冻住页面 |
+| 单元测试 | `tests/*.test.js` | `node --test`，37 个用例，覆盖上面全部逻辑 + 历史缺陷回归 |
+| 端到端测试 | `tests/e2e_smoke.py` | Playwright + 真 Chromium，33 项断言：渲染、同名标题去重、撤销栈、ReDoS 中断、文库持久化、历史快照策略、zip 备份往返、弹窗焦点陷阱、菜单方向键、控制台零报错 |
+| 版本一致性 | `scripts/sync-version.mjs` / `scripts/check-version.mjs` | 版本号单一来源（`VERSION`），脚本同步 + CI 校验 + SW 预缓存清单覆盖率检查 |
+
+```bash
+npm test                                  # 单元测试
+npm run check                             # 单测 + 版本一致性 + 全量语法检查
+
+python3 -m http.server 8137 --bind 127.0.0.1 &
+python3 tests/e2e_smoke.py                # 端到端（需 playwright + chromium）
+
+node scripts/sync-version.mjs             # 发布前：按 VERSION 同步所有版本标记
+```
+
+CI：`.github/workflows/test.yml` 在每次 push / PR 上跑单测 + 版本校验 + 语法检查。
