@@ -5699,8 +5699,13 @@ async function openNasDocFromQuery() {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get('nas'); } catch (_) { return false; }
   if (!raw) return false;
-  const filename = extractNasFilename(raw) || String(raw).trim();
-  if (!filename) return false;
+  // 注意：这里不能用 extractNasFilename —— 它只认 .md/.markdown/.txt，
+  // 而我们是从 pi-gw 抽屉进来的，文件名可能是 .json/.log/.js 等（2026-11-05 实测报"无法解析文件名"）。
+  // 只做最小校验：去掉路径、拒绝协议头，剩下的交给 NAS 决定。
+  let filename = String(raw).trim();
+  try { filename = decodeURIComponent(filename); } catch (_) {}
+  filename = filename.split(/[\\/]/).pop() || '';
+  if (!filename || /^https?:/i.test(filename)) return false;
   flash('正在从 NAS 取回 ' + filename + '…');
   const text = await downloadFromNas(filename);
   if (text == null) return false;             // 凭据缺失/网络失败：交给正常启动流程
