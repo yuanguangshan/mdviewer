@@ -112,6 +112,7 @@ const {
   parseSseLine, parseAiContent,
   cnChapterNum, parseChapterList, writtenChapterNums, cnSmall, parseCountValue, parseWordCount,
   BLOG_TITLE_MAX_LEN, blogSmartCut, parseBlogMeta, blogMdToPlain,
+  splitByFences: _splitFences, protectMath, restoreMathSource,
   shouldSnapshot,
   zipStore, unzipStore,
 } = Core;
@@ -135,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.10';
+const APP_VERSION = '4.11';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -851,12 +852,60 @@ async function renderMathFormulas() {
         { left: '$', right: '$', display: false }
       ],
       throwOnError: false,
+      // 已经渲染过的 .katex 不参与二次扫描：它内嵌的 MathML annotation 里存着 TeX 源码，
+      // 再次 auto-render 会把注释里的内容当成新公式重复渲染。
+      ignoredClasses: ['katex', 'katex-display', 'katex-mathml'],
       ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
     });
   } catch (e) {
     console.warn('KaTeX 渲染失败:', e);
   }
 }
+/**
+ * 把 protectMath 抽出的公式「填回」预览 DOM。
+ *
+ * 流程：marked 渲染时公式是占位符（xMDVMATHx0x）→ 消毒不会动它 → 这里找到含占位符的
+ * 文本节点，切成 [文本][公式][文本] 三段，公式节点用 katex.render 渲染。
+ * 好处：公式内容全程不经过 marked，`\,` 这类转义不会被当 CommonMark 转义吃掉；
+ *      行间 $$ 块也不会被 breaks:true 塞进 <br> 而失效。
+ * 兜底：KaTeX 加载失败时把占位符还原成 $…$ 源码，内容不会丢。
+ */
+async function fillMathPlaceholders(pm) {
+  if (!pm || !pm.blocks || !pm.blocks.length) return;
+  const ok = await ensureKatex();
+  const re = new RegExp(pm.tokenBase + '(\\d+)x', 'g');
+  const nodes = [];
+  const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT, null, false);
+  let n;
+  while ((n = walker.nextNode())) {
+    if (n.nodeValue && n.nodeValue.indexOf(pm.tokenBase) >= 0) nodes.push(n);
+  }
+  const src = (b) => (b.display ? '$$' : '$') + b.tex + (b.display ? '$$' : '$');
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    const frag = document.createDocumentFragment();
+    let last = 0, m;
+    re.lastIndex = 0;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const b = pm.blocks[Number(m[1])];
+      if (!b) { frag.appendChild(document.createTextNode(m[0])); last = m.index + m[0].length; continue; }
+      if (!ok || !window.katex) {
+        frag.appendChild(document.createTextNode(src(b)));
+      } else {
+        // 和 KaTeX auto-render 一致：容器一律用 <span>，displayMode 由 KaTeX 自己包 .katex-display
+        const holder = document.createElement('span');
+        try { window.katex.render(b.tex, holder, { displayMode: !!b.display, throwOnError: false }); }
+        catch (_) { holder.textContent = src(b); }
+        frag.appendChild(holder);
+      }
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
 // 让下划线 _ / __ 不再作为强调分隔符（技术写作里 snake_case、变量名常被误判成斜体）。
 // 注意：marked 的内建 em/strong 优先级高于自定义 inline 扩展，扩展永远抢不过 _，
 // 所以这里直接改 marked 内部的右分隔符正则 emStrongRDelimUnd：换成永不匹配的正则，
@@ -874,6 +923,7 @@ if (window.marked && marked.Lexer && marked.Lexer.rules && marked.Lexer.rules.in
 let lastRenderedSrc = null;
 let mermaidRendering = Promise.resolve();   // 追踪 mermaid 异步渲染，供导出前 await
 let mathRendering = Promise.resolve();      // 追踪 KaTeX 异步渲染：不 await 就会导出到公式源码
+let lastMath = { blocks: [], tokenBase: '' };   // 本次渲染抽出的公式（占位符 → 回填用）
 
 function renderMarkdown(opts) {
   const src = editor.value || '';
@@ -893,7 +943,13 @@ function renderMarkdown(opts) {
       + '</div>';
   } else {
     try {
-      html = window.marked ? marked.parse(src, { breaks: true, gfm: true }) : '<pre>' + escapeHtml(src) + '</pre>';
+      // 公式必须在 marked 之前抽出来：marked 会把 `\,` 当 CommonMark 转义吃掉，
+      // 也会把 $$ 块内的换行变成 <br>，导致 KaTeX 的定界符匹配失败、整块不渲染。
+      lastMath = protectMath(src);
+      html = window.marked
+        ? marked.parse(lastMath.text, { breaks: true, gfm: true })
+        : '<pre>' + escapeHtml(src) + '</pre>';
+      if (!window.marked) lastMath = { blocks: [], tokenBase: '' };
     } catch (e) {
       html = '<p style="color:#e06c75">渲染错误：' + escapeHtml(e.message) + '</p>';
     }
@@ -930,8 +986,11 @@ function renderMarkdown(opts) {
   // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
   // 保留给外部文档：KaTeX 只产出文本级排版，trust 默认 false（\href 等命令不生效）
   // 必须把 Promise 存下来：导出 HTML 要等它画完再取快照，否则导出里只剩 $$ 源码
-  mathRendering = Promise.resolve(renderMathFormulas()).catch(() => {})
-    .then(() => { if (preview.querySelector('.katex')) lastSanitizedHtml = snapshotPreviewHtml(); });
+  mathRendering = Promise.resolve()
+    .then(() => fillMathPlaceholders(lastMath))   // 主路径：占位符 → katex.render
+    .then(() => renderMathFormulas())             // 兜底：保护层没覆盖到的残留 $…$
+    .then(() => { if (preview.querySelector('.katex')) lastSanitizedHtml = snapshotPreviewHtml(); })
+    .catch(() => {});
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
   if (!remoteOrigin) renderAudioPlayers();     // 外部文档：不给自动播放的能力
   // --- 裸图片链接自动渲染为 <img>（见 renderImageEmbeds）---
