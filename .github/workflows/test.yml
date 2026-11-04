@@ -17,11 +17,13 @@ jobs:
           node-version: '20'
 
       # 零依赖：项目没有 package-lock，也不需要 npm install
-      # 注意：这里传【目录】而不是带引号的 "tests/*.test.js"。
-      # Node 20 不支持 --test 的 glob 展开（Node 22 才支持），引号形式在 CI 里会 ENOENT，
-      # 这就是 2026-11-01 起 test 工作流一直红的原因（本地 Node 22 跑得通，所以没被发现）。
+      # 用【裸】`node --test`（不带任何路径参数）：
+      #   · 带引号的 "tests/*.test.js" 在 Node 20 里不会展开 glob → ENOENT
+      #     （这就是 2026-11-01 起 test 工作流一直红的原因：本地 Node 22 能展开，CI 是 Node 20）
+      #   · 传目录 `tests/` 在 Node 22 里又被当成模块路径 → MODULE_NOT_FOUND
+      # 裸形式在 18/20/22 上行为一致：从 cwd 递归找 *.test.js，自动跳过 node_modules。
       - name: 单元测试（纯函数内核 / 安检规则 / Worker 集成）
-        run: node --test tests/
+        run: node --test
 
       - name: 版本一致性 + SHELL 覆盖率
         run: node scripts/check-version.mjs
