@@ -873,6 +873,7 @@ if (window.marked && marked.Lexer && marked.Lexer.rules && marked.Lexer.rules.in
 // 默认内容相同则直接返回——避免 resize / 滚动 / 切视图等「无关事件」触发整链重渲。
 let lastRenderedSrc = null;
 let mermaidRendering = Promise.resolve();   // 追踪 mermaid 异步渲染，供导出前 await
+let mathRendering = Promise.resolve();      // 追踪 KaTeX 异步渲染：不 await 就会导出到公式源码
 
 function renderMarkdown(opts) {
   const src = editor.value || '';
@@ -928,7 +929,9 @@ function renderMarkdown(opts) {
   }
   // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
   // 保留给外部文档：KaTeX 只产出文本级排版，trust 默认 false（\href 等命令不生效）
-  renderMathFormulas();
+  // 必须把 Promise 存下来：导出 HTML 要等它画完再取快照，否则导出里只剩 $$ 源码
+  mathRendering = Promise.resolve(renderMathFormulas()).catch(() => {})
+    .then(() => { if (preview.querySelector('.katex')) lastSanitizedHtml = snapshotPreviewHtml(); });
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
   if (!remoteOrigin) renderAudioPlayers();     // 外部文档：不给自动播放的能力
   // --- 裸图片链接自动渲染为 <img>（见 renderImageEmbeds）---
@@ -1954,6 +1957,46 @@ const EXPORT_CSS = [
   '.hljs{color:#383a42}.hljs-comment,.hljs-quote{color:#6a737d;font-style:italic}.hljs-keyword,.hljs-selector-tag,.hljs-literal{color:#6f42c1}.hljs-string,.hljs-addition{color:#0a7d34}.hljs-number{color:#b4570c}.hljs-title,.hljs-section{color:#0550ae}.hljs-type,.hljs-built_in{color:#953800}.hljs-attr{color:#0550ae}.hljs-tag,.hljs-meta{color:#57606a}',
 ].join('');
 
+/**
+ * 导出 HTML 用的 KaTeX 样式：把 katex.min.css 里 20 个 woff2 字体读成 data URI 内联进去。
+ *
+ * 为什么必须连字体一起内联：KaTeX 输出的不是图片，而是一堆靠 CSS 定位的 <span>——
+ * 分数线的位置、根号的形状、数学斜体、大运算符，全靠 KaTeX_* 这几个字体 + 精确的
+ * margin/height。只带 CSS 不带字体，导出的公式会退回系统字体、上下标错位、分数线跑偏，
+ * 看起来比不渲染还糟。单个 woff2 共 ~296KB（base64 后约 400KB），所以只在文档真的有公式时才加。
+ * 结果缓存：同一会话多次导出不重复读盘。
+ */
+let _katexExportCss = null;
+async function katexCssForExport() {
+  if (_katexExportCss) return _katexExportCss;
+  try {
+    let css = await (await fetch('./vendor/katex.min.css', { cache: 'no-cache' })).text();
+    // 只留 woff2：现代浏览器都支持，另外两种格式（woff/ttf）会让体积翻三倍
+    const names = [...new Set([...css.matchAll(/url\(fonts\/([\w-]+)\.woff2\)/g)].map((m) => m[1]))];
+    const toDataUrl = async (name) => {
+      try {
+        const buf = await (await fetch('./vendor/fonts/' + name + '.woff2', { cache: 'no-cache' })).arrayBuffer();
+        let bin = '';
+        const bytes = new Uint8Array(buf);
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return 'data:font/woff2;base64,' + btoa(bin);
+      } catch (_) { return null; }
+    };
+    for (const name of names) {
+      const dataUrl = await toDataUrl(name);
+      if (!dataUrl) continue;
+      css = css.split('url(fonts/' + name + '.woff2)').join('url(' + dataUrl + ')');
+    }
+    // 剩下的 woff/ttf 引用直接删掉（src 里已有一份可用的 woff2）
+    css = css.replace(/,\s*url\(fonts\/[\w-]+\.(?:woff|ttf)\)\s*format\("[^"]+"\)/g, '');
+    _katexExportCss = '\n/* KaTeX（字体已内联，断网可显示） */\n' + css;
+    return _katexExportCss;
+  } catch (e) {
+    console.warn('KaTeX 样式内联失败，导出的公式可能排版不完美：', e);
+    return '';
+  }
+}
+
 function download(name, content, type) {
   const blob = new Blob([content], { type });
   const a = document.createElement('a');
@@ -2035,6 +2078,9 @@ function exportTextColorCss() {
 async function exportHTML() {
   // mermaid 是异步渲染的：不等它画完就快照，导出里只会剩占位符。
   try { await mermaidRendering; } catch (_) {}
+  // KaTeX 同理，而且更隐蔽：它产出的是 DOM 里的 <span class="katex">，
+  // 不 await 就会把消毒后的原始 "$...$" 导出去（这就是"公式不保真"的根因）。
+  try { await mathRendering; } catch (_) {}
   lastSanitizedHtml = snapshotPreviewHtml();   // 重新取快照（含刚画完的图表，且保留 libimg:// 供内联）
   // 将 Blob 图片（libimg://id）内联为 data URL，使导出的 HTML 自包含、可独立打开
   const html = await inlineLibImages(lastSanitizedHtml);
@@ -2058,6 +2104,7 @@ async function exportHTML() {
     + darkBgRule
     + (themeCss ? ('\n' + themeCss) : '')
     + exportTextColorCss()
+    + (preview.querySelector('.katex') ? await katexCssForExport() : '')
     + '</style></head><body class="markdown-body" data-md-theme="' + mdTheme + '"'
     + ' style="' + exportTextStyleCss() + '">'
     + html + '</body></html>';
