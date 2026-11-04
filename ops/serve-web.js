@@ -59,12 +59,15 @@ const FETCH_RATE_PER_MIN = Math.max(1, Number(process.env.SERVE_FETCH_RATE) || 3
 let guard = null;
 let guardErr = '';
 (function loadGuard() {
+  // 顺序有讲究：仓库里的那份（随 git 更新）> 持久区副本 > 与 serve-web 同目录的散装副本。
+  // 同目录放最后，是因为 /root 是 overlay 层：容器重建后散装副本会消失或变旧，
+  // 而 mdviewer 仓库与 /workspace 都是持久的，应当优先当权威。
   const cands = [
     process.env.SERVE_FETCH_GUARD,
-    path.join(__dirname, 'fetch-guard.js'),
-    path.join(__dirname, 'mdviewer', 'lib', 'fetch-guard.js'),
     '/root/mdviewer/lib/fetch-guard.js',
     '/workspace/ops/fetch-guard.js',
+    path.join(__dirname, 'mdviewer', 'lib', 'fetch-guard.js'),
+    path.join(__dirname, 'fetch-guard.js'),
   ].filter(Boolean);
   for (const c of cands) {
     try {
