@@ -4146,7 +4146,15 @@ async function downloadFromNas(input) {
     url = arcUrl;
     label = '归档文件';
   } else {
-    const filename = extractNasFilename(s);
+    // extractNasFilename 只认 .md/.markdown/.txt（菜单里手输时够用）。
+    // 但从 pi-gw 抽屉进来的文件名可能是 .json/.log/.js 等，这里补一条兜底：
+    // 只要是"单个文件名"（不含协议头、不含路径分隔符）就接受。
+    let filename = extractNasFilename(s);
+    if (!filename) {
+      let bare = s;
+      try { bare = decodeURIComponent(bare); } catch (_) {}
+      if (!/^https?:/i.test(bare) && !/[\\/]/.test(bare) && bare.length <= 200) filename = bare;
+    }
     if (!filename) { flash('无法解析 NAS 文件名'); return null; }
     url = NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(filename);
     label = filename;
