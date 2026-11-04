@@ -141,21 +141,39 @@ test('Worker /fetch-md：CORS 只回白名单 Origin', opts, async () => {
   } finally { s.restore(); }
 });
 
-test('Worker /fetch-md：可选 KV 限流（绑定 RATE_KV 时生效）', opts, async () => {
+test('Worker /fetch-md：进程内限流挡突发（第 31 次 429）', opts, async () => {
   const w = await loadWorker();
-  const store = new Map();
-  const RATE_KV = {
-    async get(k) { return store.has(k) ? store.get(k) : null; },
-    async put(k, v) { store.set(k, v); },
-  };
   const s = stubFetch(() => new Response('# x', { status: 200, headers: { 'content-type': 'text/markdown' } }));
   try {
-    let last = 0;
-    for (let i = 0; i < 32; i++) {
-      const res = await w.fetch(req('https://example.com/a.md', { headers: { 'cf-connecting-ip': '1.2.3.4' } }), env({ RATE_KV }));
-      last = res.status;
+    let last = null;
+    for (let i = 0; i < 31; i++) {
+      const res = await w.fetch(req('https://example.com/a.md', { headers: { 'cf-connecting-ip': '9.9.9.9' } }), env());
       if (i < 30) assert.equal(res.status, 200, '第 ' + (i + 1) + ' 次应放行');
+      else { last = { status: res.status, body: await res.json() }; }
     }
-    assert.equal(last, 429, '超过 30 次/分钟后应 429');
+    assert.equal(last.status, 429, '第 31 次应 429');
+    assert.match(last.body.message, /Process/, '应由进程内计数器拦下');
+  } finally { s.restore(); }
+});
+
+test('Worker /fetch-md：KV 兜底计数已满时也拦（跨 isolate 的慢刷）', opts, async () => {
+  const w = await loadWorker();
+  const s = stubFetch(() => new Response('# x', { status: 200, headers: { 'content-type': 'text/markdown' } }));
+  // 模拟「另一个 isolate 已把这个 IP 记到 30 次」
+  const RATE_KV = { async get() { return '30'; }, async put() { throw new Error('不应再写'); } };
+  try {
+    const res = await w.fetch(req('https://example.com/a.md', { headers: { 'cf-connecting-ip': '8.8.8.8' } }), env({ RATE_KV }));
+    assert.equal(res.status, 429);
+    assert.match((await res.json()).message, /KV/);
+  } finally { s.restore(); }
+});
+
+test('Worker /fetch-md：KV 故障不影响正常取文（尽力而为，不 fail closed）', opts, async () => {
+  const w = await loadWorker();
+  const s = stubFetch(() => new Response('# x', { status: 200, headers: { 'content-type': 'text/markdown' } }));
+  const RATE_KV = { async get() { throw new Error('KV down'); }, async put() { throw new Error('KV down'); } };
+  try {
+    const res = await w.fetch(req('https://example.com/a.md', { headers: { 'cf-connecting-ip': '7.7.7.7' } }), env({ RATE_KV }));
+    assert.equal(res.status, 200);
   } finally { s.restore(); }
 });
