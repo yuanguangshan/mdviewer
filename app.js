@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.11';
+const APP_VERSION = '4.12';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -5687,6 +5687,41 @@ async function openExternalDocFromQuery() {
   }
 }
 
+/* ---------- NAS 文件名入口（?nas=xxx.md） ----------
+ * 用途：mdviewer 部署在公网静态站时，本地文件没法直接读；先经 pi-gw 的
+ * 「存到 Knowly」传到 NAS，再用 ?nas=<文件名> 打开，内容始终留在自己的 NAS 上，
+ * 不经过公开中转站。与 ?open=（同源文件）互补：
+ *   ?open=  同源静态文件，无需鉴权
+ *   ?nas=   NAS 上的文件，走 Basic 鉴权（凭据只在本机 localStorage）
+ * 返回 true 表示已消费该参数。
+ */
+async function openNasDocFromQuery() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get('nas'); } catch (_) { return false; }
+  if (!raw) return false;
+  const filename = extractNasFilename(raw) || String(raw).trim();
+  if (!filename) return false;
+  flash('正在从 NAS 取回 ' + filename + '…');
+  const text = await downloadFromNas(filename);
+  if (text == null) return false;             // 凭据缺失/网络失败：交给正常启动流程
+  editor.value = text;
+  currentLibId = null;
+  currentShareId = null;
+  currentFileHandle = null;
+  currentName = filename;
+  currentNameIsAuto = false;
+  updateFileName();
+  afterChange({ skipWriteback: true });
+  syncPodcastOnLoad();
+  try {
+    const wantView = new URLSearchParams(location.search).get('view');
+    if (wantView === 'preview' || wantView === 'edit' || wantView === 'split') setView(wantView);
+    else setView('preview');
+  } catch (_) { setView('preview'); }
+  toast('📥 已从 NAS 打开：' + filename, 'ok', 4500);
+  return true;
+}
+
 /* ---------- 外部网址只读浏览（v4.10：菜单「🌐 从网址打开」 / ?url=） ----------
  * 与 ?open= 的区别：?open= 只允许同源（自家容器里的文件），这里要去取别人的站点，
  * 所以必须过一道代理（浏览器跨域拿不到），也必须按「不可信内容」对待。
@@ -5845,6 +5880,9 @@ document.getElementById('remoteExit')?.addEventListener('click', () => {
 async function initLibrary() {
   // === 外部文档浏览入口：命中 ?open=<同源路径> 时直接载入（配合 serve-web.js 的目录列表）===
   if (await openExternalDocFromQuery()) return;
+
+  // === NAS 文件入口：命中 ?nas=<文件名>（线上站配合 pi-gw 的「存到 Knowly」用）===
+  if (await openNasDocFromQuery()) return;
 
   // === 外部网址只读入口：命中 ?url=<https 地址>（serve-web 外的情况走 Worker 代理）===
   try {
