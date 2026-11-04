@@ -96,3 +96,29 @@ test('splitByFences：围栏切分正确（含未闭合围栏）', () => {
   assert.equal(segs.length, 4);
   assert.deepEqual(segs.map((x) => x.code), [false, true, false, true]);
 });
+
+test('protectMath：没有公式时必须逐字节相同（不能插入任何换行）', () => {
+  const doc = [
+    '| 断言 | 问题 |',
+    '|---|---|',
+    '| `/api/health` 与 `/api/state` 的形状 | 字段改名了吗 |',
+    '',
+    '普通段落里 `a` 和 `b` 两处 `c`。',
+    '',
+    '```',
+    'code `x` $y$',
+    '```',
+  ].join('\n');
+  const r = C.protectMath(doc);
+  assert.equal(r.text, doc, '没有公式时不允许改动原文（早先的 bug 会在每处行内代码两侧插换行）');
+  assert.equal(r.blocks.length, 0);
+});
+
+test('protectMath：有行内公式时，除公式外逐字节相同（表格行不许被拆）', () => {
+  const doc = '| `a` 与 `b` | 行内 $x$ 和 $y$ |\n\n段落 `c`，公式 $z^2$ 结束。';
+  const r = C.protectMath(doc);
+  const restored = r.text.replace(new RegExp(r.tokenBase + '\\d+x', 'g'), '@@');
+  const expected = doc.replace(/\$[^$\n]+\$/g, '@@');
+  assert.equal(restored, expected, '除公式占位符外不得有任何差异（尤其不能多换行）');
+  assert.ok(!r.text.includes('\n|'), '表格行不应被拆成多行');
+});
