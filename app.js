@@ -66,6 +66,11 @@ let currentFileHandle = null;   // FileSystemFileHandle（支持时用于原地�
 let currentName = '未命名.md';
 let currentNameIsAuto = false;   // 当前标题是否由「首行自动派生」而来（手动改名/打开文件则置 false）
 let currentShareId = null;       // 当前协作分享的 R2 文件名（null = 非协作文档）
+// 外部网址只读模式（v4.10）：非空 = 当前正文来自别人的网址，而不是「我的文档」。
+// 一旦置位，所有自动写入（草稿 / 文库回写 / 分享 / 发布 / 上传）必须被拦下。
+let remoteOrigin = null;         // 来源主机名，如 'raw.githubusercontent.com'
+let remoteHref = '';             // 完整来源地址（仅本会话，不落盘）
+let remoteLoading = false;
 // ============================================================
 // 配置契约：R2_WORKER_URL（微信协作分享中转端点）
 // - 这是【唯一】与后端/部署耦合的常量，修改前请确认以下三处保持一致：
@@ -111,9 +116,26 @@ const {
   zipStore, unzipStore,
 } = Core;
 
+// === SECTION: 取文安检（lib/fetch-guard.js，与 serve-web / Worker 同一份规则） ===
+// 前端用到它只有两个目的：①点「从网址打开」时先做本地预检，不合规立刻给人话提示，
+// 不白跑一次网络；②把服务端返回的 reason 翻译成中文。
+// 声明：**前端的检查不是安全边界**，真正的拦截发生在取文代理里（同一份规则会再跑一遍）。
+const FetchGuard = window.FetchGuard || null;
+
+// 取文代理地址（唯一后端耦合点，与 R2_WORKER_URL / BLOG_PUBLISH_URL 同一定约）。
+// 同源部署（serve-web 提供 /mdviewer/ 时）直接用同源 /__fetch；
+// GitHub Pages 这类纯静态托管没有后端，走 share.want.biz 的 Worker 端点。
+const FETCH_PROXY_LOCAL = '/__fetch';
+const FETCH_PROXY_PUBLIC = 'https://share.want.biz/fetch-md';
+function resolveFetchProxy() {
+  const h = location.hostname || '';
+  if (h === 'md.want.biz' || /\.github\.io$/i.test(h) || location.protocol === 'file:') return FETCH_PROXY_PUBLIC;
+  return FETCH_PROXY_LOCAL;
+}
+
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.9';
+const APP_VERSION = '4.10';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -206,8 +228,51 @@ if (window.DOMPurify) {
     if (node.tagName === 'IMG' && node.hasAttribute('data-libimg')) {
       node.setAttribute('src', IMG_PLACEHOLDER);
     }
+    // === 以下仅对「外部网址」内容生效（remoteOrigin 非空），自家文档不受影响 ===
+    if (!remoteOrigin) return;
+    if (node.tagName === 'A') {
+      // 外链一律新窗口 + 断掉 opener：防钓鱼链接把当前页替换掉、也防反向 tabnabbing
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer nofollow');
+    }
+    if (node.tagName === 'IMG') {
+      const src = node.getAttribute('src') || '';
+      node.removeAttribute('srcset');                 // srcset 可绕过单一地址检查
+      node.setAttribute('referrerpolicy', 'no-referrer');
+      node.setAttribute('loading', 'lazy');
+      if (/^https?:/i.test(src)) {
+        // 远程图片默认【不加载】：先占位，用户点一下才真的发请求。
+        // 理由：图片是最阴的探针——对方能看出你什么时候读了文、你的出口 IP，
+        // 还能写 http://10.0.0.5:8080/x.png 来探你的内网服务（你看不见任何提示）。
+        node.setAttribute('data-remote-src', src);
+        node.setAttribute('src', IMG_PLACEHOLDER);
+        node.setAttribute('class', (((node.getAttribute('class') || '') + ' remote-img').trim()));
+        node.setAttribute('title', '外部图片（点击加载）');
+      }
+    }
+    // 行内 style 里藏 url() 就删掉：否则 style="background:url(http://…)" 又是一次探针
+    if (node.hasAttribute('style')) {
+      const st = node.getAttribute('style') || '';
+      if (/url\s*\(|expression\s*\(|@import/i.test(st)) node.removeAttribute('style');
+    }
   });
 }
+
+// 两套消毒参数：自家文档沿用旧配置（要 audio/autoplay）；外部内容用宽禁档。
+// 为什么不用同一套：自家文档里 .mp3 链接自动变播放器是特性，对外部文档就是「一打开就出声」。
+const LOCAL_SANITIZE = {
+  ADD_TAGS: ['audio', 'source'],
+  ADD_ATTR: ['controls', 'preload', 'autoplay', 'loop'],
+};
+const REMOTE_SANITIZE = {
+  // 主动去掉一切「能自己发请求 / 能自己执行」的标签
+  FORBID_TAGS: ['style', 'link', 'meta', 'base', 'form', 'input', 'button', 'select', 'textarea',
+                'iframe', 'object', 'embed', 'audio', 'video', 'source', 'track', 'noscript'],
+  FORBID_ATTR: ['autoplay', 'srcset', 'ping', 'formaction', 'id', 'data-libimg', 'onerror', 'onload'],
+  ALLOW_DATA_ATTR: false,
+  // 只放行 http(s) / mailto / 页内锚点 / 内联位图；javascript: 与其它 data: 一律剔掉
+  ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|#|data:image\/(?:png|jpe?g|gif|webp);)/i,
+};
 
 // === SECTION: 音频播放器（mp3 等链接自动渲染为 <audio> + 底部常驻小窗）===
 const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|aac|flac|webm|opus)(\?|#|$)/i;
@@ -837,7 +902,14 @@ function renderMarkdown(opts) {
   // 浏览器就会发起请求 → 控制台刷 ERR_UNKNOWN_URL_SCHEME（hook 已经来不及了）。
   html = html.replace(/src=(["'])libimg:\/\/([a-z0-9]+)\1/gi,
     (m, q, id) => 'src=' + q + IMG_PLACEHOLDER + q + ' data-libimg=' + q + id + q);
-  preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html, { ADD_TAGS: ['audio', 'source'], ADD_ATTR: ['controls', 'preload', 'autoplay', 'loop'] }) : html;
+  if (!window.DOMPurify) {
+    // 无消毒器时：外部内容宁可不渲染（只给提示），自家文档保持旧行为
+    preview.innerHTML = remoteOrigin
+      ? '<p style="color:#e06c75">DOMPurify 未加载，出于安全已拒绝渲染外部文档。请强刷（Ctrl+Shift+R）后重试。</p>'
+      : html;
+  } else {
+    preview.innerHTML = DOMPurify.sanitize(html, remoteOrigin ? REMOTE_SANITIZE : LOCAL_SANITIZE);
+  }
   // 后处理高亮：对任何 marked 版本都稳，且不依赖已废弃的 setOptions({highlight})
   if (window.hljs && !heavyDoc) {
     preview.querySelectorAll('pre code').forEach((el) => {
@@ -845,8 +917,9 @@ function renderMarkdown(opts) {
     });
   }
   // --- Mermaid 图表渲染（按需懒加载 mermaid 库，见 renderMermaidDiagrams）---
-  // 大文档跳过：mermaid 每次全量重跑成本高（另有渲染缓存）
-  if (!heavyDoc) {
+  // 大文档跳过：mermaid 每次全量重跑成本高（另有渲染缓存）；外部文档也跳过：
+  // 图定义是「可执行描述语言」，渲染进 SVG 后属于额外攻击面，读别人的文章不需要它。
+  if (!heavyDoc && !remoteOrigin) {
     try {
       mermaidRendering = Promise.resolve(renderMermaidDiagrams())
         .then(() => { lastSanitizedHtml = snapshotPreviewHtml(); })   // 图渲染完刷新快照，导出才带图
@@ -854,11 +927,12 @@ function renderMarkdown(opts) {
     } catch (_) { mermaidRendering = Promise.resolve(); }
   }
   // --- KaTeX 数学公式渲染（按需懒加载 katex 库，见 renderMathFormulas）---
+  // 保留给外部文档：KaTeX 只产出文本级排版，trust 默认 false（\href 等命令不生效）
   renderMathFormulas();
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
-  renderAudioPlayers();
+  if (!remoteOrigin) renderAudioPlayers();     // 外部文档：不给自动播放的能力
   // --- 裸图片链接自动渲染为 <img>（见 renderImageEmbeds）---
-  renderImageEmbeds();
+  if (!remoteOrigin) renderImageEmbeds();       // 外部文档：不把裸链接变成自动请求
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   // 两侧共用同一个 slugger + 同一遍历顺序：同名标题依次得到「标题」「标题-2」…
   // 修复：旧实现直接 h.id = slugify(text)，两节「## 总结」会产生重复 id，目录只能跳到第一个。
@@ -1370,6 +1444,14 @@ previewPane.addEventListener('scroll', () => {
   tocSpyRaf = requestAnimationFrame(updateTocActive);
 });
 preview.addEventListener('click', onPreviewAnchorClick);   // 预览内点击 #锚点 → 同步滚动编辑器到对应行
+// 外部文档的远程图片：点一下才真去下载（不点就永远不发出请求）
+preview.addEventListener('click', (e) => {
+  const img = e.target && e.target.closest ? e.target.closest('img.remote-img') : null;
+  if (!img || !img.getAttribute('data-remote-src')) return;
+  img.setAttribute('src', img.getAttribute('data-remote-src'));
+  img.removeAttribute('data-remote-src');
+  img.classList.remove('remote-img');
+});
 
 // === SECTION: 阅读进度 ===
 // 文库文档的阅读位置记忆 + 顶部细线进度条
@@ -1446,6 +1528,9 @@ const DRAFT_IDB_MAX = 32 * 1024 * 1024; // IDB 侧上限（再大就提示用户
 let hadBigDraft = false;                // 是否曾写过大文档草稿（避免小文档时反复写空记录）
 
 function writeDraftNow() {
+  // 外部只读文档：绝不写草稿。否则刷新后 loadDraft() 会把它当成「你的未完成稿」自动恢复，
+  // 未审核的内容就长期驻留在可信上下文里；而且会把真正在写的草稿覆盖掉。
+  if (remoteOrigin) { setSaveState('saved', '🌐 外部只读'); return; }
   if (currentLibId) {                  // 文库文档：正文由 writebackLib 负责，不再重复写一份草稿
     setSaveState('saved', '✓ 已存文库');
     return;
@@ -1495,6 +1580,7 @@ const saveDraft = debounce(() => {
 // 兜底保存：页面隐藏/卸载前立即写草稿 + 文库正文 + 阅读位置，
 // 补上防抖窗口内最后 <800ms 的输入（浏览器会等待未完成的 IndexedDB 事务）
 function flushSave() {
+  if (remoteOrigin) return;      // 外部只读：无草稿可写，也不该写
   writeDraftNow();
   if (!currentLibId || !libDb) return;
   const ratio = readingScrollRatio();
@@ -1637,6 +1723,13 @@ fileInput.addEventListener('change', (e) => {
 // === SECTION: 保存 ===
 $('#btnSave').addEventListener('click', saveFile);
 async function saveFile() {
+  // 外部只读文档不能「保存」（它没有归属、也不该被自动写回任何地方），
+  // Ctrl+S 就地转成「另存为副本」：用户的意图（想留住它）被满足了，但没有隐式副作用。
+  if (remoteOrigin) {
+    toast('🌐 外部只读：Ctrl+S 已转为「另存为副本」', 'info', 3600);
+    exportMarkdown();
+    return;
+  }
   ensureNameFromContent();          // 未命名文档：保存时按首行自动命名
   const content = editor.value;
   // 文库文档：内容已自动回写，Ctrl+S 仅作确认提示（仍可用「…」菜单导出 HTML/PDF）
@@ -3637,6 +3730,7 @@ const QUICK_CATALOG = [
   { id: 'publish-blog', label: '📝 发布到博客', kind: 'act', act: 'publish-blog', group: 'doc' },
   { id: 'save-ima', label: '💾 保存到 IMA 笔记', kind: 'act', act: 'save-ima', group: 'doc' },
   { id: 'publish-podcast', label: '🎙️ 文档转播客', kind: 'act', act: 'publish-podcast', group: 'doc' },
+  { id: 'fetch-url', label: '🌐 从网址打开（只读）', kind: 'act', act: 'fetch-url', group: 'doc' },
   { id: 'nas-upload', label: '📤 上传到 NAS', kind: 'act', act: 'nas-upload', group: 'doc' },
   { id: 'md', label: '⬇️ 导出 Markdown', kind: 'act', act: 'md', group: 'export' },
   { id: 'txt', label: '📃 导出为 txt 文件', kind: 'act', act: 'txt', group: 'export' },
@@ -3879,6 +3973,7 @@ function nasArchiveUrl(input) {
 
 // 上传当前 Markdown 文档到 NAS（multipart/form-data，字段 file，携带 Basic 鉴权）
 async function uploadToNas() {
+  if (blockInRemoteMode('上传到 NAS')) return;
   if (!editor.value.trim()) { flash('文档为空，无需上传'); return; }
   // 凭据缺失时本机输入一次，仅存 localStorage（不进仓库）
   const auth = await ensureNasAuth('上传');
@@ -4162,6 +4257,7 @@ function handleDataAct(act, btn) {
   else if (act === 'match-podcast') matchPodcastManual();
   else if (act === 'nas-upload') uploadToNas();
   else if (act === 'nas-download') nasDownloadAndOpen();
+  else if (act === 'fetch-url') openRemoteDoc();
   else if (act === 'copytext') copyText();
   else if (act === 'copymd') copyMarkdown();
   else if (act === 'copy') copyHTML();
@@ -4234,6 +4330,7 @@ function showBlogResult(url) {
 }
 
 async function publishToBlog() {
+  if (blockInRemoteMode('发布到博客')) return;
   const md = (editor.value || '').trim();
   if (!md) { flash('没有内容：请先写点东西再发布'); return; }
   flash('正在发布到博客…');
@@ -4284,6 +4381,7 @@ function showImaResultModal(docId, url, title) {
   toast('✅ 已保存到 IMA 笔记', 'ok');
 }
 async function saveToIma() {
+  if (blockInRemoteMode('保存到 IMA')) return;
   const md = (editor.value || '').trim();
   if (!md) { flash('没有内容：请先写点东西再保存'); return; }
   const { title, tags, body } = parseBlogMeta(md);
@@ -4329,6 +4427,7 @@ if (imaResultModalEl) {
 // 与「发布到博客」共用同一后端地址（BLOG_PUBLISH_URL）；区别在 targets=['nas'] + transform='read'，
 // 把内容送进 NAS 单人朗读队列，而非发布成文章。优先取编辑器选中文本，否则取整篇正文。
 async function publishToPodcast() {
+  if (blockInRemoteMode('转成播客')) return;
   // 1. 取内容：优先选中文本，否则整篇正文
   let text = '';
   if (editor.selectionStart !== editor.selectionEnd) {
@@ -5219,6 +5318,14 @@ async function deleteLibDoc(id) {
 /* 当前文档转存到文库（如从电脑打开的文章） */
 async function addToLibrary() {
   if (currentLibId) { flash('当前已在文库'); return; }
+  if (remoteOrigin) {
+    const ok = await askConfirm('把外部文档存入文库？',
+      '来源：' + remoteOrigin + '\n\n' +
+      '存入后它会变成【你自己的文档】：可编辑、自动保存、参与 NAS 同步。\n' +
+      '这一下来等于你认领了这份内容，所以只在你确实需要时才继续。');
+    if (!ok) return;
+    adoptRemoteDoc();
+  }
   ensureNameFromContent();                                     // 先自动命名（未命名 → 首行派生标题）
   const doc = { id: genId(), name: currentName || '未命名.md', content: editor.value, updatedAt: Date.now(), autoName: currentNameIsAuto };
   try {
@@ -5358,6 +5465,7 @@ async function showHistoryModal(docId) {
 // 前端仅持有 Worker 的【公开端点】URL；R2 凭据写在 Cloudflare Worker 的绑定里，
 // 绝不下发到前端、不入 git（符合“密钥永不写进会被提交代码”的原则）。
 async function shareViaR2() {
+  if (blockInRemoteMode('生成分享链接')) return;
   if (!R2_WORKER_URL) { flash('未配置分享服务地址'); return; }
   if (!editor.value.trim()) { flash('文档为空，无法分享'); return; }
   toast(currentShareId ? '正在更新协作文档…' : '正在生成协作链接…', 'info');
@@ -5459,6 +5567,12 @@ async function openExternalDocFromQuery() {
     updateFileName();
     afterChange({ skipWriteback: true });
     syncPodcastOnLoad();
+    // ?view=preview：从 serve-web 目录列表点进来的都是"看"而不是"写"，
+    // 默认双栏（编辑器占一半屏）没意义；显式允许 split/edit/preview 三种取值。
+    try {
+      const wantView = new URLSearchParams(location.search).get('view');
+      if (wantView === 'preview' || wantView === 'edit' || wantView === 'split') setView(wantView);
+    } catch (_) { /* 参数非法就保持默认视图 */ }
     toast('📖 已以浏览模式载入外部文档（要保存副本请 Ctrl/Cmd+S 另存）', 'ok', 5000);
     return true;
   } catch (e) {
@@ -5467,9 +5581,173 @@ async function openExternalDocFromQuery() {
   }
 }
 
+/* ---------- 外部网址只读浏览（v4.10：菜单「🌐 从网址打开」 / ?url=） ----------
+ * 与 ?open= 的区别：?open= 只允许同源（自家容器里的文件），这里要去取别人的站点，
+ * 所以必须过一道代理（浏览器跨域拿不到），也必须按「不可信内容」对待。
+ *
+ * 三条铁律（缺一条这个功能就不安全）：
+ *   1. 取文过安检（lib/fetch-guard.js，代理侧会再跑一遍，前端这次只是省一次网络往返）；
+ *   2. 渲染走消毒严档（REMOTE_SANITIZE）+ 外链断 opener + 远程图片不自动加载；
+ *   3. 一切自动写入全部关闭（草稿 / 文库回写 / 分享 / 发布 / 上传），只允许用户显式另存。
+ */
+
+function isRemoteMode() { return !!remoteOrigin; }
+
+/** 外部只读模式下拦截某个写入动作；返回 true 表示已被拦下 */
+function blockInRemoteMode(what) {
+  if (!remoteOrigin) return false;
+  toast('🔒 外部只读文档不能' + what + '，请先「另存为副本」或存入文库', 'warn', 4600);
+  return true;
+}
+
+function showRemoteBanner(href) {
+  const el = document.getElementById('remoteBanner');
+  const host = document.getElementById('remoteHost');
+  if (host) {
+    host.textContent = remoteOrigin || '-';
+    host.title = href || '';
+  }
+  if (el) el.hidden = false;
+}
+function hideRemoteBanner() {
+  const el = document.getElementById('remoteBanner');
+  if (el) el.hidden = true;
+}
+
+/** 解除只读 + 清掉外部标记（只在用户明确「认领」时调用，如存入文库） */
+function adoptRemoteDoc() {
+  remoteOrigin = null;
+  remoteHref = '';
+  editor.readOnly = false;
+  document.body.classList.remove('remote-mode');
+  hideRemoteBanner();
+  lastRenderedSrc = null;      // 强制重渲：消毒档不同（还要把远程图片恢复为直接加载）
+  renderMarkdown({ force: true });
+}
+
+/**
+ * 通过代理取回远端 Markdown 文本。
+ * @returns {Promise<{ok:true,text:string,href:string,host:string}|{ok:false,reason:string,message?:string}>}
+ */
+async function fetchRemoteText(raw) {
+  if (!FetchGuard) return { ok: false, reason: 'disabled' };        // 规则模块缺失（缓存不完整）就不取
+  const pre = FetchGuard.checkFetchUrl(raw);                        // 本地预检：不合规根本不必发请求
+  if (!pre.ok) return { ok: false, reason: pre.reason, message: pre.message };
+
+  const proxy = resolveFetchProxy();
+  const url = proxy + '?url=' + encodeURIComponent(pre.href);
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  // 代理侧超时是 10s；客户端多留 5s，让「代理自己超时返回 504」优先发生，错误理由更准
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), (FetchGuard.FETCH_TIMEOUT_MS || 10000) + 5000) : null;
+  try {
+    const resp = await fetch(url, {
+      cache: 'no-store',
+      credentials: 'omit',                                            // 不向代理带任何凭据
+      headers: { 'X-Mdviewer': '1' },
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    const ct = resp.headers.get('content-type') || '';
+    // 失败一律是 JSON（带 reason），先解析出来再把理由翻译成人话
+    if (!resp.ok || /json/i.test(ct)) {
+      let payload = null;
+      try { payload = await resp.json(); } catch (_) { /* 不是 JSON：多半是端点不存在，走下面的兜底 */ }
+      if (payload && payload.ok === false) return { ok: false, reason: payload.reason || 'bad-response', message: payload.message };
+      // 返回体不是本服务的约定格式（老版本 Worker 会把 /fetch-md 当成分享 id 处理，回 {error:'bad-id'}）
+      // → 统一解释为「取文端点没部署/没开启」，这比「对方返回了错误状态码」准确得多。
+      return { ok: false, reason: 'disabled', message: (payload && (payload.message || payload.error)) || ('HTTP ' + resp.status) };
+    }
+    if (!/markdown|text\/plain/i.test(ct)) return { ok: false, reason: 'bad-response', message: 'content-type: ' + (ct || '-') };
+
+    // 按字节再量一次（代理已经量过，这里防「代理被换掉/被中间层篡改」）
+    const buf = await resp.arrayBuffer();
+    if (FetchGuard.exceedsLimit(buf.byteLength)) return { ok: false, reason: 'too-large' };
+    const text = new TextDecoder('utf-8').decode(buf);
+    return { ok: true, text, href: pre.href, host: pre.host };
+  } catch (e) {
+    const aborted = ctrl && ctrl.signal.aborted;
+    return { ok: false, reason: aborted ? 'timeout' : 'network', message: (e && e.message) || String(e) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** 菜单入口：弹输入框 → 取文 → 进只读模式 */
+async function openRemoteDoc(rawInput) {
+  if (remoteLoading) return;
+  let raw = rawInput;
+  if (!raw) {
+    raw = await askInput('从网址打开（只读）', {
+      desc: '粘贴一个 https 开头的 Markdown 链接，例如 https://raw.githubusercontent.com/…/README.md\n' +
+            '只读打开：不写入文库、不覆盖草稿、不自动保存。',
+      def: remoteHref || '',
+    });
+  }
+  if (!raw) return;
+  remoteLoading = true;
+  try {
+    toast('正在取文…', 'info');
+    const r = await fetchRemoteText(raw);
+    if (!r.ok) {
+      const msg = FetchGuard ? FetchGuard.describeFailure(r.reason) : ('取文失败：' + (r.reason || ''));
+      toast('❌ ' + msg, 'err', 6200);
+      console.warn('[mdviewer] 取文失败', r);
+      return;
+    }
+    enterRemoteMode(r);
+    toast('🌐 已按只读方式载入外部文档（编辑、分享、发布均已禁用）', 'ok', 4600);
+  } finally {
+    remoteLoading = false;
+  }
+}
+
+/** 进入外部只读模式：清空所有「归属」上下文，再载入正文 */
+function enterRemoteMode(r) {
+  const name = FetchGuard ? FetchGuard.fileNameFromUrl(r.href) : 'remote.md';
+  remoteOrigin = r.host || 'external';
+  remoteHref = r.href || '';
+  // 这三行是关键：把「这份内容是谁的」彻底切断，让所有隐式写入无处可去
+  currentLibId = null;        // 不在文库上下文里 → writebackLib 无事可做
+  currentShareId = null;      // 不会拿别人的文档去覆盖某个协作分享
+  currentFileHandle = null;   // Ctrl+S 不会写回某个本地文件
+  currentName = name;
+  currentNameIsAuto = false;
+
+  editor.value = r.text;
+  editor.readOnly = true;     // 只读：这不是「你的稿子」，不需要也不应该在这里改
+  document.body.classList.add('remote-mode');
+  resetUndo();
+  updateFileName();
+  showRemoteBanner(r.href);
+  // skipWriteback 挡住文库回写；草稿不需要额外开关——writeDraftNow() 里看到 remoteOrigin 就直接返回。
+  afterChange({ skipWriteback: true });
+  setView('preview');         // 来看的，不是来写的
+  setSaveState('saved', '🌐 外部只读');
+}
+
+/** 退出只读：直接回干净的地址（远程正文本来就没落盘，重载不会丢任何东西） */
+function exitRemoteMode() {
+  location.assign(location.origin + location.pathname);
+}
+
+// 横幅按钮：另存副本（走导出）+ 退出
+document.getElementById('remoteSaveCopy')?.addEventListener('click', () => { exportMarkdown(); });
+document.getElementById('remoteExit')?.addEventListener('click', () => {
+  hideRemoteBanner();
+  exitRemoteMode();
+});
+
 async function initLibrary() {
   // === 外部文档浏览入口：命中 ?open=<同源路径> 时直接载入（配合 serve-web.js 的目录列表）===
   if (await openExternalDocFromQuery()) return;
+
+  // === 外部网址只读入口：命中 ?url=<https 地址>（serve-web 外的情况走 Worker 代理）===
+  try {
+    const rawUrl = new URLSearchParams(location.search).get('url');
+    if (rawUrl) {
+      await openRemoteDoc(rawUrl);
+      if (remoteOrigin) return;          // 取文失败则继续往下走，别把用户卡在空页
+    }
+  } catch (_) { /* 参数非法：忽略，按普通启动处理 */ }
 
   // === 协作分享入口：命中 ?share_r2=xxx.md 时从 R2 拉取并进入协作模式 ===
   try {

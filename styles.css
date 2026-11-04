@@ -147,6 +147,50 @@ body.fullscreen .fs-float { display: none; }   /* 全屏时隐藏“进入”按
 .menu button.active { background: var(--bg-soft); color: var(--accent-soft); }
 .menu [data-sub]::after { content: ''; }
 
+/* ---------- 外部来源横幅（v4.10：从网址打开 = 只读） ---------- */
+/* 远程文档与自己的文稿必须视觉可分：左边一条琥珀色，读起来就知道「这不是我的东西」。 */
+.remote-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 16px; font-size: 12.5px; line-height: 1.5;
+  background: color-mix(in srgb, #f59e0b 14%, var(--bg-soft));
+  border-bottom: 1px solid color-mix(in srgb, #f59e0b 42%, var(--border));
+  border-left: 3px solid #f59e0b;
+  color: var(--text);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.remote-banner[hidden] { display: none; }
+.remote-banner code {
+  font-size: 12px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(0, 0, 0, .18); color: inherit;
+}
+.remote-banner b { color: #f59e0b; }
+.rb-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.rb-btn {
+  font: inherit; font-size: 12px; cursor: pointer;
+  padding: 3px 10px; border-radius: 6px;
+  background: transparent; color: inherit;
+  border: 1px solid color-mix(in srgb, #f59e0b 55%, transparent);
+}
+.rb-btn:hover { background: color-mix(in srgb, #f59e0b 22%, transparent); }
+
+/* 只读态：编辑器不再接受输入，光标提示改为禁止 */
+body.remote-mode #editor { cursor: default; }
+body.remote-mode .editor-wrap::after {
+  content: '只读'; position: absolute; top: 6px; right: 10px; z-index: 3;
+  font-size: 11px; padding: 1px 6px; border-radius: 4px; pointer-events: none;
+  color: var(--text-dim); background: var(--bg-soft); border: 1px solid var(--border);
+  opacity: .8;
+}
+
+/* 远程图片：默认不加载（先占位，点一下才真的发请求），避免被当成跟踪像素/内网探针 */
+.preview img.remote-img {
+  min-width: 28px; min-height: 28px; max-width: 100%;
+  background: repeating-linear-gradient(45deg, rgba(127,127,127,.14) 0 6px, transparent 6px 12px);
+  border: 1px dashed color-mix(in srgb, var(--border) 70%, #f59e0b);
+  cursor: zoom-in;
+}
+
 /* ---------- Workspace split ---------- */
 .workspace { flex: 1; display: flex; min-height: 0; flex-direction: row; position: relative; }
 

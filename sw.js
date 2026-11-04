@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v4.9.1';
+const CACHE_NAME = 'md-editor-v4.10';
 
 const SHELL = [
   './',
@@ -16,6 +16,7 @@ const SHELL = [
   './vendor/purify.min.js',
   './vendor/highlight.min.js',
   './lib/md-core.js',            // 纯函数内核：缺失会导致应用无法启动，必须预缓存
+  './lib/fetch-guard.js',        // 取文安检规则：前端预检用，缺了只是提示变弱，但一并预缓存更省心
   './lib/md-regex-worker.js',    // 正则任务线程（防 ReDoS）：离线也要可用
   // 注：mermaid.min.js / html2pdf.bundle.min.js 体积大且非首屏必需，
   // 改为运行时按需懒加载（见 app.js loadScript），不纳入预缓存，避免安装即下载 4MB+。
