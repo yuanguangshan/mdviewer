@@ -44,6 +44,21 @@ for (const [what, v] of pairs) {
 }
 if (swVer && swVer !== version) errors.push(`版本不一致：sw.js CACHE_NAME = ${swVer}，应为 ${version}`);
 
+// 陈旧版本扫描：源码里不该残留「别的版本号」。
+// 事故来源：手改 app.js 的注释/文案时带上 "（v4.14）" 之类字样，用户看到会以为没更新。
+// 只查 5 个版本载体文件，注释里的历史版本号（如 v4.10）用白名单放行。
+const STALE_ALLOW = new Set(['4.10', '4.11', '4.12', '4.13', '4.14', '4.15']);
+for (const f of ['index.html', 'app.js', 'sw.js', 'VERSION', 'package.json']) {
+  const text = read(f);
+  for (const m of text.matchAll(/v?(\d+\.\d+(?:\.\d+)?)/g)) {
+    const v = m[1];
+    if (!/^4\.\d+/.test(v)) continue;
+    if (v === short || v === version || v === version + '.0') continue;
+    if (STALE_ALLOW.has(v)) continue;
+    warnings.push(`${f} 里出现非当前版本号：${v}（当前 ${version}）`);
+  }
+}
+
 // SHELL 覆盖率：index.html 里引用的本地 js/css 必须在 SW 预缓存清单中
 const shell = (sw.match(/const SHELL = \[([\s\S]*?)\];/) || [])[1] || '';
 const shellPaths = new Set([...shell.matchAll(/'(\.\/[^']+)'/g)].map((m) => m[1].replace(/^\.\//, '')));

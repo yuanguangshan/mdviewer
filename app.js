@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.15';
+const APP_VERSION = '4.16';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -5023,6 +5023,33 @@ function renderShortcutHints() {
     btn.appendChild(span);
   });
 }
+
+// === 远端版本自检：解决「手机上一直跑着旧版」 ===
+// SW 只在导航时检查更新，PWA 常驻后台时可能几天都不导航一次，用户就一直看到旧版本
+// （典型症状：本地已是 v4.16，手机状态栏还写着 v4.14）。
+// 这里主动拉一次 index.html（no-store）读 meta 版本，比当前新就弹更新提示条。
+let remoteVerCheckedAt = 0;
+async function checkRemoteVersion() {
+  const now = Date.now();
+  if (now - remoteVerCheckedAt < 10 * 60 * 1000) return;   // 10 分钟内不重复查
+  remoteVerCheckedAt = now;
+  try {
+    const resp = await fetch('./index.html', { cache: 'no-store' });
+    if (!resp.ok) return;
+    const html = await resp.text();
+    const m = html.match(/name="app-version" content="([\d.]+)"/);
+    if (!m) return;
+    if (compareVersion(m[1], APP_VERSION) > 0) {
+      console.info('[mdviewer] 发现新版本 ' + m[1] + '（当前 ' + APP_VERSION + '）');
+      const banner = document.getElementById('updateBanner');
+      if (banner) banner.hidden = false;
+    }
+  } catch (_) { /* 离线 / 无网：静默，离线本来就是设计目标 */ }
+}
+setTimeout(checkRemoteVersion, 3000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkRemoteVersion();   // 从后台切回来时顺手查一次
+});
 
 // === SECTION: 注册 Service Worker（PWA 离线 / 可安装） ===
 /* 部署后新版本提示：检测到新 SW 安装完成（且当前有旧 SW 在控制页面）时，
