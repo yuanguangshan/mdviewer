@@ -102,7 +102,7 @@ if (!Core) {
 }
 
 const {
-  escapeHtml, normalizeTextColor, humanBytes, compareVersion, stripInlineMd,
+  escapeHtml, normalizeTextColor, humanBytes, compareVersion, stripInlineMd, fuzzyScore,
   slugify, createSlugger, buildHeadingLineMap,
   lineOffsets, posToLineCol,
   countWords,
@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.14';
+const APP_VERSION = '4.15';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1163,9 +1163,14 @@ function updateTocActive() {
   if (!tocList) return;
   const heads = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
   if (!heads.length) return;
-  // 纯编辑模式（预览 display:none）无滚动上下文 → 高亮首个标题即可
+  // 纯编辑模式（预览 display:none）：没有预览滚动上下文，改为「跟随光标所在章节」。
+  // 旧实现固定高亮第一个标题，等于在编辑态目录完全没用。
   if (previewPane.clientHeight === 0) {
-    setActiveTocItem(heads[0]);
+    const { line } = posToLineCol(getLineOffsets(editor.value), editor.selectionStart);
+    let bestSlug = null, bestLine = -1;
+    headingLineMap.forEach((ln, slug) => { if (ln <= line && ln > bestLine) { bestLine = ln; bestSlug = slug; } });
+    const hit = bestSlug ? Array.prototype.find.call(heads, (h) => h.id === bestSlug) : null;
+    setActiveTocItem(hit || heads[0]);
     return;
   }
   const paneTop = previewPane.getBoundingClientRect().top;
@@ -1402,6 +1407,11 @@ function updateGutter() {
 function updatePos() {
   const { line, col } = posToLineCol(getLineOffsets(editor.value), editor.selectionStart);
   $('#posInfo').textContent = '行 ' + line + '，列 ' + col;
+  // 目录打开时跟随光标（编辑态没有滚动 spy，只能靠光标）
+  if (tocOpen) {
+    cancelAnimationFrame(tocSpyRaf);
+    tocSpyRaf = requestAnimationFrame(updateTocActive);
+  }
 }
 // 统计 / 行号 / 光标位置：input 每键触发。
 // 旧实现用 rAF 合并——但连续打字时「每帧一次」仍是 60 次/秒的全量正则扫描。
@@ -1619,7 +1629,7 @@ function writeDraftNow() {
   // 未审核的内容就长期驻留在可信上下文里；而且会把真正在写的草稿覆盖掉。
   if (remoteOrigin) { setSaveState('saved', '🌐 外部只读'); return; }
   if (currentLibId) {                  // 文库文档：正文由 writebackLib 负责，不再重复写一份草稿
-    setSaveState('saved', '✓ 已存文库');
+    setSaveState('saved', '✓ 已保存 · 文库');
     return;
   }
   const content = editor.value;
@@ -1635,7 +1645,7 @@ function writeDraftNow() {
     }
     openLibDb()
       .then(() => idbPutDraft({ id: 'current', content, name: currentName, at }))
-      .then(() => { hadBigDraft = true; setSaveState('saved', '✓ 已保存（大文档 · 本地库）'); })
+      .then(() => { hadBigDraft = true; setSaveState('saved', '✓ 已保存 · 大文档'); })
       .catch(() => setSaveState('warn', '⚠ 草稿保存失败'));
     return;
   }
@@ -1654,7 +1664,7 @@ function writeDraftNow() {
     // localStorage 满：退化为 IDB 存储，不再静默丢草稿
     openLibDb()
       .then(() => idbPutDraft({ id: 'current', content, name: currentName, at }))
-      .then(() => setSaveState('saved', '✓ 已保存（本地库）'))
+      .then(() => setSaveState('saved', '✓ 已保存 · 本地库'))
       .catch(() => setSaveState('warn', '⚠ 存储空间不足，草稿未保存'));
   }
 }
@@ -3903,6 +3913,13 @@ const QUICK_GROUPS = [
   { g: 'fmt', label: '文本格式' },
   { g: 'ai', label: 'AI 动作' },
 ];
+// 文库副标题：默认「本地文档库」；想写自己名字就 localStorage.setItem('md-lib-sub', '…')
+try {
+  const sub = localStorage.getItem('md-lib-sub');
+  const el = document.getElementById('libSubtitle');
+  if (sub && el) el.textContent = sub;
+} catch (_) {}
+
 const QUICK_DEFAULT = ['searchReplace', 'rename', 'bg', 'fmtImage', 'addtolib', 'md', 'txt', 'share-r2', 'theme', 'aiSummary', 'aiGenerate', 'aiBookOutline'];
 
 function loadQuickConfig() {
@@ -4037,6 +4054,109 @@ function resetQuickCustomize() {
 
 
 
+// === SECTION: 命令面板（Ctrl/Cmd+Shift+P） ===
+// 为什么要有它：右上角「⋯」里已经 70 多项，手机上翻菜单很痛苦。
+// 实现上刻意「不维护第二份命令表」——直接从菜单 DOM 里抓 data-act / data-action，
+// 执行时 el.click() 复用原有全部接线（含 NAS 提示、AI 子菜单、主题切换）。
+// 这样以后加菜单项，命令面板自动就有，不会出现两份清单对不上。
+const palette = $('#palette');
+const paletteScrim = $('#paletteScrim');
+const paletteInput = $('#paletteInput');
+const paletteList = $('#paletteList');
+let paletteItems = [];
+let paletteActive = 0;
+
+function collectPaletteCommands() {
+  const out = [];
+  const seen = new Set();
+  document.querySelectorAll('#moreMenu [data-act], #moreMenu [data-action]').forEach((el) => {
+    if (el.hasAttribute('data-sub')) return;            // 子菜单标题不是命令
+    if (el.id === 'aiMenuModel') return;
+    const key = el.dataset.act ? 'act:' + el.dataset.act : 'action:' + el.dataset.action;
+    if (seen.has(key)) return;
+    seen.add(key);
+    // 取标签前先克隆并剔除菜单里已渲染的 .kbd 快捷键（否则面板里会重复显示一遍）
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('.kbd, .mi-model').forEach((n) => n.remove());
+    let label = (clone.textContent || '').replace(/[▸]/g, '').replace(/\s+/g, ' ').trim();
+    const hintKey = el.dataset.act || el.dataset.action;
+    out.push({ el, label, key, hint: ACTION_HINTS[hintKey] || '' });
+  });
+  return out;
+}
+
+// 模糊匹配逻辑已下沉到 lib/md-core.js 的 fuzzyScore（有单测）
+
+function renderPalette(query) {
+  const all = collectPaletteCommands();
+  const scored = all
+    .map((c) => ({ c, s: Core.fuzzyScore(query, c.label) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s);
+  paletteItems = scored.map((x) => x.c);
+  paletteActive = 0;
+  paletteList.innerHTML = '';
+  if (!paletteItems.length) {
+    paletteList.innerHTML = '<li class="palette-empty">没有匹配的命令</li>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  paletteItems.forEach((c, i) => {
+    const li = document.createElement('li');
+    li.className = 'palette-item' + (i === 0 ? ' active' : '');
+    li.setAttribute('role', 'option');
+    li.innerHTML = '<span class="pi-label"></span><span class="pi-hint"></span>';
+    li.querySelector('.pi-label').textContent = c.label;
+    li.querySelector('.pi-hint').textContent = c.hint ? formatCombo(c.hint) : '';
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); runPaletteItem(i); });
+    frag.appendChild(li);
+  });
+  paletteList.appendChild(frag);
+}
+
+function movePaletteActive(delta) {
+  if (!paletteItems.length) return;
+  paletteActive = (paletteActive + delta + paletteItems.length) % paletteItems.length;
+  [...paletteList.children].forEach((li, i) => li.classList.toggle('active', i === paletteActive));
+  const cur = paletteList.children[paletteActive];
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+}
+
+function runPaletteItem(i) {
+  const c = paletteItems[i];
+  closePalette();
+  if (!c || !c.el) return;
+  // 用 click 而不是直接调函数：子菜单按钮、需要 btn.dataset 的动作都能照常工作
+  c.el.click();
+}
+
+function openPalette() {
+  if (!palette) return;
+  palette.hidden = false;
+  paletteScrim.hidden = false;
+  paletteInput.value = '';
+  renderPalette('');
+  setTimeout(() => paletteInput.focus(), 0);
+}
+
+function closePalette() {
+  if (!palette || palette.hidden) return;
+  palette.hidden = true;
+  paletteScrim.hidden = true;
+  editor.focus();
+}
+
+if (palette) {
+  paletteInput.addEventListener('input', () => renderPalette(paletteInput.value.trim()));
+  paletteInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); movePaletteActive(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); movePaletteActive(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(paletteActive); }
+    else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  });
+  paletteScrim.addEventListener('click', closePalette);
+}
+
 // === SECTION: NAS 同步：上传 / 下载 ===
 // 凭据不写死在代码里（避免随仓库泄露）。
 // 首次上传时在本机弹窗输入一次，仅存入浏览器 localStorage（不上传、不入 git）。
@@ -4052,8 +4172,8 @@ function updateNasMenuHint() {
   const suffix = configured ? '' : '（需凭据）';
   const dl = document.querySelector('[data-act="nas-download"]');
   const ul = document.querySelector('[data-act="nas-upload"]');
-  if (dl) dl.textContent = '📥 从 NAS 下载' + suffix;
-  if (ul) ul.textContent = '📤 上传到 NAS' + suffix;
+  if (dl) dl.textContent = '📥 从 NAS 取回' + suffix;
+  if (ul) ul.textContent = '📤 存到 NAS' + suffix;
 }
 updateNasMenuHint();
 
@@ -4352,6 +4472,16 @@ function toggleSubmenu(name) {
     if (trig) { trig.classList.add('active'); trig.setAttribute('aria-expanded', 'true'); }
   }
 }
+// Esc 关闭「⋯」菜单与快捷菜单：原来只有点外面才关，键盘用户按 Esc 没反应。
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (palette && !palette.hidden) return;          // 命令面板自己处理
+  if (moreMenu && !moreMenu.hidden) { openMoreMenu(false); }
+  // 快捷菜单的变量作用域在下面那个 IIFE 里，这里直接按 id 取，避免 ReferenceError
+  const qm = document.getElementById('quickMenu');
+  if (qm && !qm.hasAttribute('hidden')) closeQuickMenu();
+}, true);
+
 function openMoreMenu(open) {
   closeAllSubmenus();
   if (open) { moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); updateAiModelBadge(); }
@@ -4417,6 +4547,7 @@ function handleDataAct(act, btn) {
   else if (act === 'backup-export') exportBackup();
   else if (act === 'backup-import') importBackup();
   else if (act === 'diagnostics') showDiagnostics();
+  else if (act === 'commandPalette') openPalette();
 }
 
 // === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===
@@ -4709,12 +4840,73 @@ editor.addEventListener('drop', (e) => {
 editor.addEventListener('keydown', (e) => {
   if (e.key === 'Tab') {
     e.preventDefault();
+    // 表格里 Tab 跳下一格（Shift+Tab 上一格）——写表格时不用手点，这是最高频的表格痛点。
+    // 判定很保守：当前行必须是表格行（以 | 开头），且光标在该行内。
+    if (jumpTableCell(e.shiftKey)) return;
     const s = editor.selectionStart, en = editor.selectionEnd;
     editor.value = editor.value.slice(0, s) + '  ' + editor.value.slice(en);
     editor.selectionStart = editor.selectionEnd = s + 2;
     editor.dispatchEvent(new Event('input'));
   }
 });
+
+// === 表格单元格跳转（Tab / Shift+Tab） ===
+// 返回 true 表示已处理（调用方不要再插入缩进）。
+// 规则：只认「整行是表格行」的情形（`|...|` 或含 ≥2 个 | 的行），
+// 避免把正文里的竖线误判成表格。跳到下一格即「下一个 | 之后」；行末则跳到下一行第一个单元格；
+// 最后一行最后一格 → 新建一行空表格行（保持列数），这样连续录入不用离开键盘。
+function jumpTableCell(backward) {
+  const pos = editor.selectionStart;
+  if (pos !== editor.selectionEnd) return false;
+  const src = editor.value;
+  const lineStart = src.lastIndexOf('\n', pos - 1) + 1;
+  let lineEnd = src.indexOf('\n', pos);
+  if (lineEnd < 0) lineEnd = src.length;
+  const line = src.slice(lineStart, lineEnd);
+  if (!/^\s*\|/.test(line) || (line.match(/\|/g) || []).length < 2) return false;
+
+  const col = pos - lineStart;
+  const pipes = [];
+  for (let i = 0; i < line.length; i++) if (line[i] === '|') pipes.push(i);
+  let target = -1;
+  if (backward) {
+    for (let k = pipes.length - 1; k >= 0; k--) if (pipes[k] < col - 1) { target = pipes[k]; break; }
+    if (target < 0) return false;                       // 已在首格
+    // 放到该竖线后第一个非空格
+    let p = target + 1;
+    while (p < line.length && line[p] === ' ') p++;
+    editor.selectionStart = editor.selectionEnd = lineStart + p;
+  } else {
+    for (let k = 0; k < pipes.length; k++) if (pipes[k] > col) { target = pipes[k]; break; }
+    if (target < 0) {
+      // 行末 → 下一行首格；没有下一行就补一行（列数沿用当前行）
+      const nextStart = lineEnd + 1;
+      const nextEnd = src.indexOf('\n', nextStart);
+      const nextLine = src.slice(nextStart, nextEnd < 0 ? src.length : nextEnd);
+      if (/^\s*\|/.test(nextLine)) {
+        let p = nextStart;
+        while (p < src.length && src[p] !== '|') p++;
+        if (p < src.length) {
+          p++;
+          while (p < src.length && src[p] === ' ') p++;
+          editor.selectionStart = editor.selectionEnd = p;
+          return true;
+        }
+      }
+      const cols = Math.max(1, pipes.length - 1);
+      const blank = '|' + '   |'.repeat(cols);
+      editor.value = src.slice(0, lineEnd) + '\n' + blank + src.slice(lineEnd);
+      editor.selectionStart = editor.selectionEnd = lineEnd + 3;
+      editor.dispatchEvent(new Event('input'));
+      return true;
+    }
+    let p = target + 1;
+    while (p < line.length && line[p] === ' ') p++;
+    editor.selectionStart = editor.selectionEnd = lineStart + p;
+  }
+  editor.dispatchEvent(new Event('select'));
+  return true;
+}
 
 // === SECTION: 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"） ===
 // mod = Ctrl(Linux/Win) 或 ⌘(macOS)；alt = Alt / ⌥；shift = Shift / ⇧
@@ -4728,13 +4920,14 @@ const SHORTCUTS = new Map([
   ['f2', renameFile],
   ['mod+shift+l', addToLibrary],
   ['mod+shift+e', exportMarkdown],
-  ['mod+p', exportPDF],
+  ['mod+alt+p', exportPDF],
   ['mod+shift+m', copyMarkdown],
   ['mod+shift+c', copyHTML],
   ['mod+shift+y', copyText],
   ['mod+shift+w', () => { wrapMode = !wrapMode; localStorage.setItem('md-wrap', wrapMode ? 'on' : 'off'); applyWrap(); }],
   ['mod+shift+t', () => applyTheme(THEME_CYCLE[(THEME_CYCLE.indexOf(themeMode) + 1) % 3])],
   ['mod+f', () => TEXT_ACTIONS.searchReplace()],
+  ['mod+shift+p', () => openPalette()],
   ['mod+alt+v', nextView],
   ['mod+alt+shift+d', showDiagnostics],   // 诊断信息（真机上排查问题用）
   // 格式
@@ -4785,7 +4978,8 @@ document.addEventListener('keydown', (e) => {
 const ACTION_HINTS = {
   rename: 'mod+shift+r', addtolib: 'mod+shift+l',
   copytext: 'mod+shift+y', copymd: 'mod+shift+m', copy: 'mod+shift+c',
-  md: 'mod+shift+e', pdf: 'mod+p', wrap: 'mod+shift+w', theme: 'mod+shift+t',
+  md: 'mod+shift+e', pdf: 'mod+alt+p', wrap: 'mod+shift+w', theme: 'mod+shift+t',
+  commandPalette: 'mod+shift+p',
   searchReplace: 'mod+f',
   fmtBold: 'mod+b', fmtItalic: 'mod+i', fmtCode: 'mod+e', fmtLink: 'mod+k',
   fmtImage: 'mod+shift+i',
@@ -4793,6 +4987,21 @@ const ACTION_HINTS = {
   fmtH1: 'mod+1', fmtH2: 'mod+2', fmtH3: 'mod+3',
   fmtH4: 'mod+4', fmtH5: 'mod+5', fmtH6: 'mod+6',
 };
+
+// === Mac 快捷键提示归一 ===
+// 大量 title 里写死了 "Ctrl+O" 这类字样。Mac 上应该是 ⌘O，且 Ctrl 与 Cmd 不是一回事。
+// 这里在启动时统一改写一次：只动 title 属性里的 Ctrl，不动正文（正文里提到 Ctrl 的地方是说明文字）。
+function normalizeMacShortcutHints() {
+  const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || '') ||
+    /mac/i.test(navigator.userAgent || '');
+  if (!isMac) return;
+  document.querySelectorAll('[title]').forEach((el) => {
+    const t = el.getAttribute('title') || '';
+    if (!/Ctrl/.test(t)) return;
+    el.setAttribute('title', t.replace(/Ctrl\+(?=[A-Za-z])/g, '⌘').replace(/Ctrl/g, '⌘'));
+  });
+}
+normalizeMacShortcutHints();
 
 /* 组合键 → 用户可读标签（区分 macOS / 其它平台） */
 function formatCombo(combo) {
@@ -5372,7 +5581,7 @@ function openLibDocData(doc) {
   afterChange({ skipWriteback: true });   // 打开即载入，不应刷新更新时间
   syncPodcastOnLoad();
   restoreReadingProgress();              // 恢复到上次阅读位置（rAF 延迟执行，在渲染之后）
-  setSaveState('saved', '✓ 文库');
+  setSaveState('saved', '✓ 已保存 · 文库');
   renderLibrary();
 }
 async function openLibDoc(id) {
@@ -5448,7 +5657,7 @@ async function deleteLibDoc(id) {
     localStorage.removeItem('md-draft-ts');
     updateFileName();
     renderMarkdown({ force: true }); updateStats(); updateGutter(); updatePos();   // 刷新空视图（不触发草稿写入）
-    setSaveState('', '就绪');
+    setSaveState('', '待编辑');
   }
   renderLibrary();
   flash('已删除');
@@ -5471,7 +5680,7 @@ async function addToLibrary() {
     await idbPut(doc);
     currentLibId = doc.id;                                 // 之后编辑自动回写文库
     localStorage.setItem('md-lib-current', doc.id);
-    setSaveState('saved', '✓ 文库');
+    setSaveState('saved', '✓ 已保存 · 文库');
     renderLibrary();
     flash('已加入文库');
   } catch (_) { flash('加入失败'); }
@@ -5556,7 +5765,7 @@ function writebackLib() {
       autoName: currentNameIsAuto,
     }).then(() => (changed ? snapshotHistory(currentLibId, newContent) : null));
   }).then(() => {
-    setSaveState('saved', '✓ 已存文库');
+    setSaveState('saved', '✓ 已保存 · 文库');
     const t = libList.querySelector('.lib-item.active .lib-item-time');   // 轻量更新时间，不打断列表
     if (t) t.textContent = fmtTime(Date.now());
     syncLibraryToNasDebounced();   // 文库改动后静默触发增量同步（去抖，不打断输入）
@@ -6076,7 +6285,7 @@ function initSplitter() {
   });
 }
 
-setSaveState('', '就绪');
+setSaveState('', '待编辑');
 initLibrary();
 // 文库闲置 GC：启动 10s 后静默扫描孤儿图片并清理（不弹提示）
 setTimeout(() => { gcOrphanImages({ silent: true }).catch(() => {}); }, 10000);

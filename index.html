@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0f1115" />
   <!-- app-version：与 app.js 里的 APP_VERSION 比对，缓存错位时给出明确提示 -->
-  <meta name="app-version" content="4.14" />
+  <meta name="app-version" content="4.15" />
   <meta name="description" content="雨轩编辑器（mdviewer）：本地优先、离线可用的 PWA Markdown 写作工具，支持实时预览、数学公式、图表、AI 续写与文库同步。" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="雨轩编辑器 mdviewer" />
@@ -17,7 +17,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./styles.css?v=4.14" />
+  <link rel="stylesheet" href="./styles.css?v=4.15" />
   <!-- 防 FOUC：在 body 出现前尽早按「本地偏好 → 系统主题」着色 -->
   <script>
     (function () {
@@ -62,55 +62,71 @@
       <div class="actions">
         <button id="btnNew" class="btn icon" title="新建 (Ctrl+Alt+N)" aria-label="新建文档">📄</button>
         <button id="btnOpen" class="btn icon" title="打开本地文件 (Ctrl+O)" aria-label="打开文件">📂</button>
-        <button id="btnSave" class="btn icon" title="保存 / 另存为 (Ctrl+S)" aria-label="保存">💾<span class="t"> 保存</span></button>
+        <button id="btnSave" class="btn icon" title="保存 (Ctrl+S)" aria-label="保存">💾<span class="t"> 保存</span></button>
         <span class="sep"></span>
-        <button id="btnView" class="btn view" title="切换视图：双栏 / 编辑 / 预览 (Ctrl+Alt+V)" aria-label="切换视图">分屏</button>
+        <button id="btnView" class="btn view" title="视图：分屏（点击切换 编辑 → 预览）(Ctrl+Alt+V)" aria-label="切换视图">分屏</button>
         <span class="stat" id="stat" title="字数 · 预计阅读时间">0 字</span>
         <div class="menu-wrap">
           <button id="btnMore" class="btn icon" title="更多操作" aria-label="更多操作" aria-haspopup="true" aria-expanded="false">⋯</button>
           <div class="menu" id="moreMenu" role="menu" hidden>
-            <!-- 高频功能 -->
+            <button role="menuitem" data-act="commandPalette" class="mi-strong">命令面板</button>
+            <div class="menu-sep"></div>
+
+            <!-- 编辑 -->
+            <div class="menu-label" role="presentation">编辑</div>
             <button role="menuitem" data-action="searchReplace">🔍 查找与替换</button>
             <button role="menuitem" data-act="rename">✏️ 重命名</button>
+            <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
+            <button role="menuitem" data-act="textStyle" title="调整右侧预览正文的字号与颜色">🔠 正文字号与颜色…</button>
+
+            <!-- 插入 -->
+            <div class="menu-label" role="presentation">插入</div>
+            <button role="menuitem" data-action="fmtImage">🖼 插入图片</button>
+            <button role="menuitem" data-act="bg">🏞️ 设置背景图片</button>
+            <button role="menuitem" data-act="match-podcast">🎧 插入播客播放器</button>
+
+            <!-- AI -->
+            <div class="menu-label" role="presentation">AI</div>
             <button role="menuitem" data-sub="ai" aria-haspopup="true" aria-expanded="false">
               <span class="mi-label">✨ AI 智能助理 ▸</span>
               <span class="mi-model" id="aiMenuModel">free</span>
             </button>
-            <button role="menuitem" data-action="fmtImage">🖼 插入图片</button>
-            <button role="menuitem" data-act="bg">🖼️ 设置背景图片</button>
-            <button role="menuitem" data-act="match-podcast">🎧 插入播客播放器</button>
-            <button role="menuitem" data-act="nas-download">📥 从 NAS 下载</button>
-            <button role="menuitem" data-act="fetch-url" title="粘贴任意 https 网址，以只读方式渲染其中的 Markdown">🌐 从网址打开（只读）</button>
-            <button role="menuitem" data-sub="macro" aria-haspopup="true" aria-expanded="false">🛠 文本宏命令 ▸</button>
-            <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题设置 ▸</button>
-            <button role="menuitem" data-act="textStyle" title="调整右侧预览正文的字号与颜色">🔠 正文字号与颜色…</button>
-            <div class="menu-sep"></div>
 
-            <!-- 文档操作 -->
+            <!-- 文档 -->
+            <div class="menu-label" role="presentation">文档</div>
             <button role="menuitem" data-act="addtolib">📚 添加到文库</button>
             <button role="menuitem" data-act="publish-blog">📝 发布到博客</button>
-            <button role="menuitem" data-act="save-ima">💾 保存到 IMA 笔记</button>
             <button role="menuitem" data-act="publish-podcast">🎙️ 文档转播客</button>
-            <button role="menuitem" data-act="nas-upload">📤 上传到 NAS</button>
-            <button role="menuitem" data-act="md">⬇️ 导出 Markdown</button>
-            <button role="menuitem" data-act="txt">📃 导出为 txt 文件</button>
-            <button role="menuitem" data-act="share-r2">🔗 生成分享链接</button>
-            <button role="menuitem" data-act="backup-export" title="把整个文库（含图片）打包成 zip 下载">🗄️ 备份全库（.zip）</button>
-            <button role="menuitem" data-act="backup-import" title="从备份 zip 恢复文档与图片">📥 从备份恢复</button>
-            <button role="menuitem" data-act="diagnostics" title="查看版本 / 存储 / 最近错误（Ctrl+Alt+Shift+D）">🩺 诊断信息</button>
-            <div class="menu-sep"></div>
+            <button role="menuitem" data-act="save-ima">💾 存到 IMA</button>
 
-            <!-- 复制与格式 -->
+            <!-- 导出 -->
+            <div class="menu-label" role="presentation">导出</div>
+            <button role="menuitem" data-act="md">⬇️ 导出 Markdown（.md）</button>
+            <button role="menuitem" data-act="html">📄 导出 HTML（.html）</button>
+            <button role="menuitem" data-act="pdf" title="导出为 PDF（打印引擎渲染，公式/代码高亮保留）">🖨️ 导出 PDF</button>
+            <button role="menuitem" data-act="txt">📃 导出纯文本（.txt）</button>
             <button role="menuitem" data-act="copytext">📋 复制纯文本</button>
-            <button role="menuitem" data-act="copymd">📋 复制Markdown</button>
+            <button role="menuitem" data-act="copymd">📋 复制 Markdown</button>
+            <button role="menuitem" data-act="copy">📋 复制 HTML</button>
+            <button role="menuitem" data-act="share-r2">🔗 生成分享链接</button>
+
+            <!-- 同步与备份 -->
+            <div class="menu-label" role="presentation">同步与备份</div>
+            <button role="menuitem" data-act="nas-upload">📤 存到 NAS</button>
+            <button role="menuitem" data-act="nas-download">📥 从 NAS 取回</button>
+            <button role="menuitem" data-act="fetch-url" title="粘贴任意 https 网址，以只读方式渲染其中的 Markdown">🌐 从网址打开（只读）</button>
+            <button role="menuitem" data-act="backup-export" title="把整个文库（含图片）打包成 zip 下载">📦 备份全库（.zip）</button>
+            <button role="menuitem" data-act="backup-import" title="从备份 zip 恢复文档与图片">♻️ 从备份恢复</button>
+
+            <!-- 设置 -->
+            <div class="menu-label" role="presentation">设置</div>
             <button role="menuitem" data-sub="format" aria-haspopup="true" aria-expanded="false">🅰️ 格式 ▸</button>
             <button role="menuitem" data-act="fb-customize">🎨 自定义格式刷</button>
+            <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题设置 ▸</button>
             <button role="menuitem" data-sub="settings" aria-haspopup="true" aria-expanded="false">⚙️ 开关设置 ▸</button>
-            <div class="menu-label" role="presentation">其它</div>
-            <button role="menuitem" data-act="copy">📋 复制 html</button>
-            <button role="menuitem" data-act="html">📄 导出 html</button>
+            <button role="menuitem" data-act="diagnostics" title="查看版本 / 存储 / 最近错误">🩺 诊断信息</button>
             <div class="menu-sep"></div>
-            <div class="menu-foot" role="presentation">Designed by yuanguangshan.</div>
+            <div class="menu-foot" role="presentation">由 苑广山 设计</div>
           </div>
 
           <!-- 二级菜单：主题 -->
@@ -143,8 +159,8 @@
 
           <!-- 二级菜单：格式 -->
           <div class="menu sub" id="sub-format" role="menu" aria-label="格式" hidden>
-            <button role="menuitem" data-action="fmtBold">🅱 加粗</button>
-            <button role="menuitem" data-action="fmtItalic">🇮 斜体</button>
+            <button role="menuitem" data-action="fmtBold">B 加粗</button>
+            <button role="menuitem" data-action="fmtItalic">I 斜体</button>
             <button role="menuitem" data-action="fmtCode">⌨️ 行内代码</button>
             <button role="menuitem" data-action="fmtLink">🔗 链接</button>
             <button role="menuitem" data-action="fmtImage">🖼 图片</button>
@@ -222,11 +238,18 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v4.14</span>
+      <span class="version">v4.15</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
     <button id="btnTocFs" class="toc-fs" hidden title="目录（双击屏幕可显隐）" aria-label="目录">📖</button>
+  </div>
+
+  <!-- 命令面板（Ctrl/Cmd+Shift+P）：菜单项过多时的扁平化入口，手机也能用 -->
+  <div class="palette-scrim" id="paletteScrim" hidden></div>
+  <div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="命令面板" hidden>
+    <input id="paletteInput" class="palette-input" type="text" placeholder="输入命令名，↑↓ 选择，Enter 执行，Esc 关闭" autocomplete="off" spellcheck="false" />
+    <ul class="palette-list" id="paletteList" role="listbox"></ul>
   </div>
 
   <!-- 文库：左侧抽屉式本地文档库 -->
@@ -235,7 +258,7 @@
     <div class="lib-head">
       <div class="lib-head-left">
         <div class="lib-title">🗄️ 文库</div>
-        <span class="lib-subtitle">苑广山的在线文库</span>
+        <span class="lib-subtitle" id="libSubtitle">本地文档库</span>
       </div>
       <div class="lib-head-right">
         <button class="lib-music-toggle" id="libMusicToggle" title="音乐播放器" aria-label="音乐播放器" aria-expanded="false">🎵</button>
