@@ -102,7 +102,7 @@ if (!Core) {
 }
 
 const {
-  escapeHtml, normalizeTextColor, humanBytes, compareVersion, stripInlineMd, fuzzyScore,
+  escapeHtml, normalizeTextColor, humanBytes, compareVersion, stripInlineMd, fuzzyScore, rankFreq,
   slugify, createSlugger, buildHeadingLineMap,
   lineOffsets, posToLineCol,
   countWords,
@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.16';
+const APP_VERSION = '4.18';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -4482,9 +4482,94 @@ document.addEventListener('keydown', (e) => {
   if (qm && !qm.hasAttribute('hidden')) closeQuickMenu();
 }, true);
 
+// === 常用功能：按点击频率取前 5 项 ===
+// 数据只存在本机 localStorage（不上传、不入库）：这是使用习惯，不是文档内容。
+// 只统计「真正执行了的菜单项」——二级菜单触发器、命令面板入口不计入，否则会把"打开子菜单"当成常用。
+const FREQ_KEY = 'md-act-freq';
+const FREQ_TOP = 5;
+// 初始默认（还没积累使用数据时先摆这五项）：存到 NAS / 从 NAS 取回 / 添加到文库 / 主题设置 / 导出纯文本。
+// 种子计数为 1，用户真用过的项一旦达到 2 次就会顶掉它们——默认值是起点，不是特权。
+// sub: 前缀表示「二级菜单触发器」（点开子菜单），这类不参与计数，只作为初始占位。
+const FREQ_DEFAULTS = ['act:nas-upload', 'act:nas-download', 'act:addtolib', 'sub:theme', 'act:txt'];
+
+function loadFreq() {
+  try {
+    const raw = localStorage.getItem(FREQ_KEY);
+    if (!raw) {
+      // 首次运行：写入默认五项（计数 1），之后完全由真实使用决定排序
+      const seed = {};
+      FREQ_DEFAULTS.forEach((k) => { seed[k] = 1; });
+      saveFreq(seed);
+      return seed;
+    }
+    const map = JSON.parse(raw);
+    return (map && typeof map === 'object') ? map : {};
+  } catch (_) { return {}; }
+}
+function saveFreq(map) {
+  try { localStorage.setItem(FREQ_KEY, JSON.stringify(map)); } catch (_) {}
+}
+function bumpFreq(key) {
+  if (!key) return;
+  const map = loadFreq();
+  map[key] = (map[key] || 0) + 1;
+  // 只留前 50 个键，避免 localStorage 无限膨胀（菜单项总数也远小于这个量级）
+  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 50);
+  saveFreq(Object.fromEntries(entries));
+}
+// 按 data-act / data-action 找原始菜单项（克隆它，样式与行为天然一致）
+function findMenuButton(key) {
+  const [kind, name] = key.split(':');
+  const attr = kind === 'act' ? 'data-act' : kind === 'sub' ? 'data-sub' : 'data-action';
+  const all = menuWrap.querySelectorAll('[' + attr + ']');
+  for (const el of all) {
+    if (el.getAttribute(attr) === name && !el.closest('#freqSection')) return el;
+  }
+  return null;
+}
+// 统一在一个 capture 监听里统计：菜单、左上角快捷菜单、命令面板（内部走 el.click()）三条路径
+// 最终都会冒泡到这里，只记一次；不用在每个入口各写一遍（那样迟早漏掉一条路径）。
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-act], [data-action]') : null;
+  if (!el) return;
+  if (el.dataset.act === 'commandPalette') return;
+  if (el.dataset.act) bumpFreq('act:' + el.dataset.act);
+  else if (el.dataset.action) bumpFreq('action:' + el.dataset.action);
+}, true);
+
+function renderFreqMenu() {
+  const section = document.getElementById('freqSection');
+  const list = document.getElementById('freqList');
+  if (!section || !list) return;
+  const top = rankFreq(loadFreq(), FREQ_TOP, ['act:commandPalette'], FREQ_DEFAULTS);
+  list.innerHTML = '';
+  let shown = 0;
+  for (const key of top) {
+    const src = findMenuButton(key);
+    if (!src) continue;                       // 菜单项被删了 → 静默跳过
+    const clone = src.cloneNode(true);
+    clone.classList.add('mi-freq');
+    // 子菜单触发器：保留箭头（点开确实还有一层），其余项去掉多余的 ▸
+    if (key.indexOf('sub:') !== 0) {
+      clone.querySelectorAll('.mi-label').forEach((n) => { n.textContent = n.textContent.replace('▸', '').trim(); });
+    }
+    clone.querySelectorAll('.kbd').forEach((n) => n.remove());
+    const combo = ACTION_HINTS[key.split(':')[1]];
+    if (combo) {
+      const kbd = document.createElement('span');
+      kbd.className = 'kbd';
+      kbd.textContent = formatCombo(combo);
+      clone.appendChild(kbd);
+    }
+    list.appendChild(clone);
+    shown++;
+  }
+  section.hidden = shown === 0;
+}
+
 function openMoreMenu(open) {
   closeAllSubmenus();
-  if (open) { moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); updateAiModelBadge(); }
+  if (open) { renderFreqMenu(); moreMenu.removeAttribute('hidden'); btnMore.setAttribute('aria-expanded', 'true'); updateAiModelBadge(); }
   else { moreMenu.setAttribute('hidden', ''); btnMore.setAttribute('aria-expanded', 'false'); }
 }
 btnMore.addEventListener('click', () => openMoreMenu(moreMenu.hasAttribute('hidden')));
