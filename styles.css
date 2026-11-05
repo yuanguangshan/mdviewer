@@ -236,6 +236,21 @@ body.remote-mode .editor-wrap::after {
   padding: 20px 22px 60px 22px; font-size: 15px; line-height: 25px;
   font-family: var(--mono); tab-size: 2; overflow-x: auto;
 }
+/* 行号槽的逐行容器：高度必须与 #editor 行高严格一致（25px），否则整列行号会累积错位 */
+.gutter .gl { height: 25px; line-height: 25px; white-space: pre; }
+.gutter .gl-h { box-shadow: inset 3px 0 0 currentColor; padding-right: 2px; }
+.gutter .gl-h1 { color: #79c0ff; }
+.gutter .gl-h2 { color: #6cb6ff; }
+.gutter .gl-h3 { color: #5ca1ff; }
+.gutter .gl-h4, .gutter .gl-h5, .gutter .gl-h6 { color: #8bb8e8; }
+.gutter .gl-fence, .gutter .gl-in-fence { color: #6b7280; }
+[data-theme="light"] .gutter .gl-h1 { color: #0969da; }
+[data-theme="light"] .gutter .gl-h2 { color: #1d6fe0; }
+[data-theme="light"] .gutter .gl-h3 { color: #1d6fe0; }
+[data-theme="light"] .gutter .gl-h4,
+[data-theme="light"] .gutter .gl-h5,
+[data-theme="light"] .gutter .gl-h6 { color: #3d7fd0; }
+
 .preview-pane { background: var(--bg-soft); overflow: auto; }
 .preview { padding: 20px 26px; flex: 1; min-width: 0; }
 
@@ -692,19 +707,27 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
   font-weight: inherit !important;
   letter-spacing: inherit !important;
 }
+.editor-highlight .src-marker{ opacity: .32; }                    /* 语法标记：只调透明度，不删字符、不改字宽 */
 .editor-highlight .src-h      { color: #5ca1ff; }                 /* 标题：只变蓝，不加粗 */
+.editor-highlight .src-h1     { color: #79c0ff; }
+.editor-highlight .src-h2     { color: #6cb6ff; }
+.editor-highlight .src-h3     { color: #5ca1ff; }
+.editor-highlight .src-h4, .editor-highlight .src-h5, .editor-highlight .src-h6 { color: #8bb8e8; }
+.editor-highlight .src-lang   { color: #d19a66; }                 /* 围栏语言标注 */
 .editor-highlight .src-key    { color: #7aa2f7; }                 /* front matter 的键 */
 .editor-highlight .src-str    { color: #98c379; }                 /* 字符串 / 加粗内容 */
 .editor-highlight .src-num    { color: #d19a66; }
 .editor-highlight .src-bool   { color: #c678dd; }
 .editor-highlight .src-comment{ color: #6b7280; }
-.editor-highlight .src-code   { color: #98c379; }                 /* 行内代码 */
-.editor-highlight .src-fence  { color: #8b93a7; }                 /* 围栏行 + 围栏内整块 */
+.editor-highlight .src-code   { color: #98c379;                 /* 行内代码：加背景块，但绝不能加 padding（会推字错位） */
+                                background: rgba(152, 195, 121, .16); border-radius: 3px; }
+.editor-highlight .src-fence  { color: #8b93a7;                 /* 围栏行 + 围栏内整块 */
+                                background: rgba(255, 255, 255, .035); }
 .editor-highlight .src-bullet { color: #d19a66; }                 /* 列表符号 */
 .editor-highlight .src-quote  { color: #8b93a7; }                 /* 引用符号 */
 .editor-highlight .src-hr     { color: #4b5263; }
 .editor-highlight .src-table  { color: #9aa3b2; }
-.editor-highlight .src-strong { color: #e6e9ef; }                 /* 加粗：只变亮，不加粗 */
+.editor-highlight .src-strong { color: #f0c674; }                 /* 加粗：只变色，不加粗（加粗会改字宽） */
 .editor-highlight .src-em     { color: #56b6c2; }                 /* 斜体：只变色，不倾斜 */
 .editor-highlight .src-url    { color: #61afef; }
 [data-theme="light"] .editor-highlight .src-h      { color: #1d6fe0; }
@@ -714,12 +737,20 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 [data-theme="light"] .editor-highlight .src-bool   { color: #8250df; }
 [data-theme="light"] .editor-highlight .src-comment{ color: #6e7781; }
 [data-theme="light"] .editor-highlight .src-code   { color: #0a7d34; }
-[data-theme="light"] .editor-highlight .src-fence  { color: #8c959f; }
+[data-theme="light"] .editor-highlight .src-fence  { color: #8c959f; background: rgba(0, 0, 0, .03); }
 [data-theme="light"] .editor-highlight .src-bullet { color: #b4570c; }
 [data-theme="light"] .editor-highlight .src-quote  { color: #8c959f; }
 [data-theme="light"] .editor-highlight .src-hr     { color: #d0d7de; }
 [data-theme="light"] .editor-highlight .src-table  { color: #6e7781; }
-[data-theme="light"] .editor-highlight .src-strong { color: #1a2030; }
+[data-theme="light"] .editor-highlight .src-strong { color: #8a6d00; }
+[data-theme="light"] .editor-highlight .src-lang   { color: #b4570c; }
+[data-theme="light"] .editor-highlight .src-code   { background: rgba(10, 125, 52, .10); }
+[data-theme="light"] .editor-highlight .src-h1     { color: #0969da; }
+[data-theme="light"] .editor-highlight .src-h2     { color: #1d6fe0; }
+[data-theme="light"] .editor-highlight .src-h3     { color: #1d6fe0; }
+[data-theme="light"] .editor-highlight .src-h4,
+[data-theme="light"] .editor-highlight .src-h5,
+[data-theme="light"] .editor-highlight .src-h6     { color: #3d7fd0; }
 [data-theme="light"] .editor-highlight .src-em     { color: #0b7285; }
 [data-theme="light"] .editor-highlight .src-url    { color: #0969da; }
 

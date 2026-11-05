@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.13';
+const APP_VERSION = '4.14';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1369,13 +1369,35 @@ function updateStats() {
   $('#stat').textContent = txt;
   const ri = $('#readInfo'); if (ri) ri.textContent = txt;   // 预览模式底部栏复用同一数据
 }
+// 行号槽：除了数字，还给出「层级」线索（标题行左侧色条 + 围栏行淡色）。
+// 为什么不用改字号/字重来体现层级：gutter 与 #editor 必须逐行对齐（同为 25px 行高），
+// 任何字形变化都会让行号错位——和编辑区覆盖层是同一条红线。
 function updateGutter() {
-  const lines = getLineOffsets(editor.value).length;
-  if (gutter.dataset.lines === String(lines)) return;
-  gutter.dataset.lines = String(lines);
-  let s = '';
-  for (let i = 1; i <= lines; i++) s += i + '\n';
-  gutter.textContent = s;   // white-space:pre 下逐行对齐 #editor（line-height:25px 一致）
+  const src = editor.value;
+  const lines = src.split('\n');
+  // 轻量签名：行数 + 长度 + 标题数量。内容改动（含标题层级变化）都会刷新，纯滚动不会。
+  const sig = lines.length + '|' + src.length + '|' + (src.match(/^ {0,3}#{1,6}\s/gm) || []).length;
+  if (gutter.dataset.sig === sig) return;
+  gutter.dataset.sig = sig;
+  gutter.dataset.lines = String(lines.length);
+  let html = '';
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    let cls = 'gl';
+    const fm = ln.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      cls += ' gl-in-fence';
+      if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length) fence = null;
+    } else if (fm) {
+      cls += ' gl-fence'; fence = fm[1];
+    } else {
+      const h = ln.match(/^ {0,3}(#{1,6})\s/);
+      if (h) cls += ' gl-h gl-h' + h[1].length;
+    }
+    html += '<div class="' + cls + '">' + (i + 1) + '</div>';
+  }
+  gutter.innerHTML = html;
 }
 function updatePos() {
   const { line, col } = posToLineCol(getLineOffsets(editor.value), editor.selectionStart);

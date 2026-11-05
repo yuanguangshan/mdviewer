@@ -89,3 +89,21 @@ test('正文里的加粗/斜体只变色不换字形', () => {
   assert.ok(html.includes('src-code'));
   assert.ok(!/font-(style|weight)/i.test(html));
 });
+
+test('半渲染：语法标记要单独成 src-marker（只调透明度），文字不变', () => {
+  const doc = '# 标题 **粗** 和 *斜* 和 `码` 和 [链接](http://a.b)';
+  const html = C.highlightMarkdownSource(doc);
+  assert.ok(html.includes('<span class="src-marker">#</span>'), '标题的 # 要能被淡化');
+  assert.ok(html.includes('<span class="src-marker">**</span>'), '加粗标记要能被淡化');
+  assert.ok(html.includes('src-h1'), '标题按层级上色');
+  assert.equal(stripTags(html), doc, '半渲染同样不许改动任何字符');
+});
+
+test('半渲染：表格竖线淡化、任务清单方括号按状态上色', () => {
+  const doc = '| a | b |\n| - | - |\n- [x] 做完\n- [ ] 没做';
+  const html = C.highlightMarkdownSource(doc);
+  assert.ok(html.includes('<span class="src-marker">|</span>'));
+  assert.ok(html.includes('src-str">[x]'), '已完成用字符串色');
+  assert.ok(html.includes('src-bool">[ ]'), '未完成用另一种色');
+  assert.equal(stripTags(html), doc);
+});
