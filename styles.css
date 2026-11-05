@@ -684,23 +684,44 @@ body.no-preview .splitter, body.no-editor .splitter { display: none; }
 .editor-wrap.wrap-on .gutter { display: none; }
 .editor-wrap.wrap-on .editor-highlight { left: 0; white-space: pre-wrap; }
 
-/* token 配色 —— 跟随 app 主题（与预览主题解耦）。标题=蓝+粗 */
-.editor-highlight .hljs-section { font-weight: 700; color: #5ca1ff; }
-.editor-highlight .hljs-strong { font-weight: 700; color: #e6e9ef; }
-.editor-highlight .hljs-emphasis { font-style: italic; color: #c678dd; }
-.editor-highlight .hljs-code { color: #98c379; }
-.editor-highlight .hljs-link { color: #61afef; }
-.editor-highlight .hljs-string { color: #d19a66; }
-.editor-highlight .hljs-bullet { color: #d19a66; }
-.editor-highlight .hljs-quote { font-style: italic; color: #9aa3b2; }
-[data-theme="light"] .editor-highlight .hljs-section { color: #1d6fe0; }
-[data-theme="light"] .editor-highlight .hljs-strong { color: #1a2030; }
-[data-theme="light"] .editor-highlight .hljs-emphasis { color: #a855f7; }
-[data-theme="light"] .editor-highlight .hljs-code { color: #0a7d34; }
-[data-theme="light"] .editor-highlight .hljs-link { color: #0969da; }
-[data-theme="light"] .editor-highlight .hljs-string { color: #b4570c; }
-[data-theme="light"] .editor-highlight .hljs-bullet { color: #b4570c; }
-[data-theme="light"] .editor-highlight .hljs-quote { color: #64748b; }
+/* token 配色 —— 跟随 app 主题（与预览主题解耦）。
+   铁律：这里只许改 color / background / border，绝不改 font-style、font-weight、font-size、letter-spacing。
+   覆盖层是叠在 textarea 上的一层"影子文字"，字形宽度一旦和 textarea 不一致，整行就会错位。 */
+.editor-highlight, .editor-highlight * {
+  font-style: normal !important;
+  font-weight: inherit !important;
+  letter-spacing: inherit !important;
+}
+.editor-highlight .src-h      { color: #5ca1ff; }                 /* 标题：只变蓝，不加粗 */
+.editor-highlight .src-key    { color: #7aa2f7; }                 /* front matter 的键 */
+.editor-highlight .src-str    { color: #98c379; }                 /* 字符串 / 加粗内容 */
+.editor-highlight .src-num    { color: #d19a66; }
+.editor-highlight .src-bool   { color: #c678dd; }
+.editor-highlight .src-comment{ color: #6b7280; }
+.editor-highlight .src-code   { color: #98c379; }                 /* 行内代码 */
+.editor-highlight .src-fence  { color: #8b93a7; }                 /* 围栏行 + 围栏内整块 */
+.editor-highlight .src-bullet { color: #d19a66; }                 /* 列表符号 */
+.editor-highlight .src-quote  { color: #8b93a7; }                 /* 引用符号 */
+.editor-highlight .src-hr     { color: #4b5263; }
+.editor-highlight .src-table  { color: #9aa3b2; }
+.editor-highlight .src-strong { color: #e6e9ef; }                 /* 加粗：只变亮，不加粗 */
+.editor-highlight .src-em     { color: #56b6c2; }                 /* 斜体：只变色，不倾斜 */
+.editor-highlight .src-url    { color: #61afef; }
+[data-theme="light"] .editor-highlight .src-h      { color: #1d6fe0; }
+[data-theme="light"] .editor-highlight .src-key    { color: #0550ae; }
+[data-theme="light"] .editor-highlight .src-str    { color: #0a7d34; }
+[data-theme="light"] .editor-highlight .src-num    { color: #b4570c; }
+[data-theme="light"] .editor-highlight .src-bool   { color: #8250df; }
+[data-theme="light"] .editor-highlight .src-comment{ color: #6e7781; }
+[data-theme="light"] .editor-highlight .src-code   { color: #0a7d34; }
+[data-theme="light"] .editor-highlight .src-fence  { color: #8c959f; }
+[data-theme="light"] .editor-highlight .src-bullet { color: #b4570c; }
+[data-theme="light"] .editor-highlight .src-quote  { color: #8c959f; }
+[data-theme="light"] .editor-highlight .src-hr     { color: #d0d7de; }
+[data-theme="light"] .editor-highlight .src-table  { color: #6e7781; }
+[data-theme="light"] .editor-highlight .src-strong { color: #1a2030; }
+[data-theme="light"] .editor-highlight .src-em     { color: #0b7285; }
+[data-theme="light"] .editor-highlight .src-url    { color: #0969da; }
 
 /* 更多菜单：分组小标题 */
 .menu-label { padding: 7px 12px 3px; font-size: 11px; color: var(--text-dim); user-select: none; }

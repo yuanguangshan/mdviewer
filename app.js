@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.12';
+const APP_VERSION = '4.13';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1284,8 +1284,8 @@ function scheduleRender() {
 
 // === SECTION: 编辑器源码高亮：textarea 之上叠一层 <pre>，复用 hljs 自带 markdown 语法 ===
 function renderEditorHighlight() {
-  // 移动端（软换行）或缺 markdown 语法时不启用：避免错位 / 降级为纯文本
-  if (window.innerWidth <= 760 || !window.hljs || !hljs.getLanguage || !hljs.getLanguage('markdown')) {
+  // 移动端（软换行）不启用：避免错位 / 降级为纯文本
+  if (window.innerWidth <= 760) {
     editor.parentElement.classList.remove('has-overlay');
     editorHighlight.textContent = '';
     return;
@@ -1297,7 +1297,10 @@ function renderEditorHighlight() {
     return;
   }
   try {
-    let html = hljs.highlight(editor.value, { language: 'markdown' }).value;
+    // 用内核的源码高亮，不再用 hljs 的 markdown 语法：
+    // hljs 那套是给"渲染后的 markdown"写的，会把 front matter 里的下划线跨行配成 <em>，
+    // 还会给标题/强调加粗倾斜 —— 字宽一变，覆盖层就和 textarea 对不齐（见 lib/md-core.js 注释）。
+    let html = Core.highlightMarkdownSource(editor.value);
     if (currentSearchHit) html = wrapSearchHitInHtml(html, currentSearchHit);
     editorHighlight.innerHTML = html;
     editor.parentElement.classList.add('has-overlay');
