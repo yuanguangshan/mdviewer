@@ -44,6 +44,14 @@ for (const [what, v] of pairs) {
 }
 if (swVer && swVer !== version) errors.push(`版本不一致：sw.js CACHE_NAME = ${swVer}，应为 ${version}`);
 
+// 脚本指纹：index.html 里所有本地 <script src> 必须带 ?v=<短版本>。
+// 事故：app.js 没指纹时，部署后浏览器/CDN 仍返回旧脚本 → 页面新、脚本旧，刷新无用。
+const scriptSrcs = [...html.matchAll(/<script[^>]+src="(\.\/[^"]+)"/g)].map((m) => m[1]);
+for (const src of scriptSrcs) {
+  if (!/\?v=[\d.]+$/.test(src)) errors.push(`脚本缺少版本指纹：${src}`);
+  else if (!src.endsWith('?v=' + short)) errors.push(`脚本指纹版本不一致：${src}，应为 ?v=${short}`);
+}
+
 // 陈旧版本扫描：源码里不该残留「别的版本号」。
 // 事故来源：手改 app.js 的注释/文案时带上 "（v4.14）" 之类字样，用户看到会以为没更新。
 // 只查 5 个版本载体文件，注释里的历史版本号（如 v4.10）用白名单放行。

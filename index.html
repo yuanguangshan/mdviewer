@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0f1115" />
   <!-- app-version：与 app.js 里的 APP_VERSION 比对，缓存错位时给出明确提示 -->
-  <meta name="app-version" content="4.18" />
+  <meta name="app-version" content="4.19" />
   <meta name="description" content="雨轩编辑器（mdviewer）：本地优先、离线可用的 PWA Markdown 写作工具，支持实时预览、数学公式、图表、AI 续写与文库同步。" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="雨轩编辑器 mdviewer" />
@@ -17,7 +17,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./styles.css?v=4.18" />
+  <link rel="stylesheet" href="./styles.css?v=4.19" />
   <!-- 防 FOUC：在 body 出现前尽早按「本地偏好 → 系统主题」着色 -->
   <script>
     (function () {
@@ -32,13 +32,13 @@
     })();
   </script>
   <!-- 第三方库已本地化（vendor/），确保完全离线可用；小库 defer 并行下载不阻塞解析 -->
-  <script defer src="./vendor/marked.min.js"></script>
-  <script defer src="./vendor/highlight.min.js"></script>
-  <script defer src="./vendor/purify.min.js"></script>
+  <script defer src="./vendor/marked.min.js?v=4.19"></script>
+  <script defer src="./vendor/highlight.min.js?v=4.19"></script>
+  <script defer src="./vendor/purify.min.js?v=4.19"></script>
   <!-- 纯函数内核（可被 node --test 单测）；必须早于 app.js 加载 -->
-  <script defer src="./lib/md-core.js"></script>
+  <script defer src="./lib/md-core.js?v=4.19"></script>
   <!-- 取文安检规则（与 ops/serve-web.js、worker 共用同一份，前端只用于预检 + 错误文案） -->
-  <script defer src="./lib/fetch-guard.js"></script>
+  <script defer src="./lib/fetch-guard.js?v=4.19"></script>
   <!-- mermaid / html2pdf 体积大（合计 ~4MB）且非首屏必需，改为按需懒加载（见 app.js），不再这里同步加载 -->
 </head>
 <body>
@@ -131,6 +131,7 @@
             <button role="menuitem" data-sub="theme" aria-haspopup="true" aria-expanded="false">🌗 主题设置 ▸</button>
             <button role="menuitem" data-sub="settings" aria-haspopup="true" aria-expanded="false">⚙️ 开关设置 ▸</button>
             <button role="menuitem" data-act="diagnostics" title="查看版本 / 存储 / 最近错误">🩺 诊断信息</button>
+            <button role="menuitem" data-act="hardReset" title="注销离线缓存并重新加载（更新后仍显示旧版本时用这个）">🔄 强制更新（清缓存）</button>
             <div class="menu-sep"></div>
             <div class="menu-foot" role="presentation">由 苑广山 设计</div>
           </div>
@@ -244,7 +245,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v4.18</span>
+      <span class="version">v4.19</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -581,6 +582,6 @@
     </div>
   </div>
 
-  <script defer src="./app.js"></script>
+  <script defer src="./app.js?v=4.19"></script>
 </body>
 </html>

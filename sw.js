@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v4.18';
+const CACHE_NAME = 'md-editor-v4.19';
 
 const SHELL = [
   './',
@@ -80,13 +80,18 @@ self.addEventListener('fetch', (event) => {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
       try {
-        const fresh = await fetch(req);
+        // cache:'reload' 强制绕过 HTTP 缓存与 CDN 边缘缓存。
+        // 不加这一条时，部署后可能出现「页面是 4.19、脚本还是 4.16」：
+        // app.js 没有 ?v= 指纹时，浏览器缓存会把旧脚本喂给页面，刷新也拿不到新的。
+        const fresh = await fetch(new Request(req.url, { cache: 'reload' }));
         if (fresh && (fresh.ok || fresh.type === 'opaque')) {
           try { await cache.put(req, fresh.clone()); } catch (_) {}
         }
         return fresh;
       } catch (_) {
+        // 离线回退：先按完整 URL 命中，再按路径命中（预缓存里的 key 不带 ?v=），最后回 index.html
         const cached = await cache.match(req) ||
+          (await cache.match(new URL(req.url).origin + new URL(req.url).pathname)) ||
           (req.mode === 'navigate' ? (await cache.match('./index.html')) : null);
         return cached || Response.error();
       }

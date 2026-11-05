@@ -35,6 +35,14 @@ const edits = [
   ['index.html', /<meta name="app-version" content="[\d.]+" \/>/, `<meta name="app-version" content="${short}" />`],
   ['index.html', /<span class="version">v[\d.]+<\/span>/, `<span class="version">v${short}</span>`],
   ['index.html', /href="\.\/styles\.css\?v=[\d.]+"/, `href="./styles.css?v=${short}"`],   // 与 check-version 一致：资源指纹用短版
+  // 本地脚本也要带指纹：app.js 曾经没有 ?v=，部署后浏览器/CDN 边缘缓存仍给旧脚本，
+  // 表现为「页面是 4.18、脚本还是 4.16，怎么刷新都没用」。
+  ['index.html', /src="\.\/app\.js(\?v=[\d.]+)?"/, `src="./app.js?v=${short}"`],
+  ['index.html', /src="\.\/lib\/md-core\.js(\?v=[\d.]+)?"/, `src="./lib/md-core.js?v=${short}"`],
+  ['index.html', /src="\.\/lib\/fetch-guard\.js(\?v=[\d.]+)?"/, `src="./lib/fetch-guard.js?v=${short}"`],
+  ['index.html', /src="\.\/vendor\/marked\.min\.js(\?v=[\d.]+)?"/, `src="./vendor/marked.min.js?v=${short}"`],
+  ['index.html', /src="\.\/vendor\/highlight\.min\.js(\?v=[\d.]+)?"/, `src="./vendor/highlight.min.js?v=${short}"`],
+  ['index.html', /src="\.\/vendor\/purify\.min\.js(\?v=[\d.]+)?"/, `src="./vendor/purify.min.js?v=${short}"`],
   // app.js：APP_VERSION 常量（运行时与 meta 自检）
   ['app.js', /const APP_VERSION = '[\d.]+';/, `const APP_VERSION = '${short}';`],
 ];

@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.18';
+const APP_VERSION = '4.19';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -147,8 +147,9 @@ const APP_VERSION = '4.18';
   if (compareVersion(pageVer, APP_VERSION) !== 0) {
     console.warn('[mdviewer] 版本不一致：页面 ' + pageVer + ' / 脚本 ' + APP_VERSION);
     setTimeout(() => {
-      toast('⚠️ 检测到新旧混合缓存（页面 ' + pageVer + ' / 脚本 ' + APP_VERSION + '），请按 Ctrl+Shift+R 强制刷新', 'warn', 8000);
-    }, 1500);
+      toast('⚠️ 检测到新旧混合缓存（页面 ' + pageVer + ' / 脚本 ' + APP_VERSION + '），正在自动修复…', 'warn', 6000);
+      setTimeout(() => hardResetApp(), 1200);
+    }, 800);
   }
 })();
 
@@ -4633,6 +4634,7 @@ function handleDataAct(act, btn) {
   else if (act === 'backup-import') importBackup();
   else if (act === 'diagnostics') showDiagnostics();
   else if (act === 'commandPalette') openPalette();
+  else if (act === 'hardReset') hardResetApp(true);
 }
 
 // === SECTION: 发布到博客（POST /api/publish，逻辑提取自 Taio Action，改用浏览器 fetch） ===
@@ -5107,6 +5109,33 @@ function renderShortcutHints() {
     span.textContent = formatCombo(combo);
     btn.appendChild(span);
   });
+}
+
+// === 混合缓存的最终兜底：注销 SW + 清空所有 Cache + 带时间戳重载 ===
+// 为什么需要它：手机上（尤其 iOS PWA）既没有 Ctrl+Shift+R，也可能被旧 SW 长期接管。
+// 光弹提示「请强制刷新」等于让用户自己解决一个他解决不了的问题。
+// 只做一次（sessionStorage 标记），避免服务端真出现新旧文件并存时陷入无限重载。
+async function hardResetApp(manual) {
+  const FLAG = 'md-ver-reset';
+  // 手动触发（菜单「强制更新」）总是执行；自动修复每次会话只做一次，避免循环重载
+  if (!manual) {
+    try { if (sessionStorage.getItem(FLAG) === '1') return; sessionStorage.setItem(FLAG, '1'); } catch (_) {}
+  }
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches && caches.keys) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (_) {}
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set('_r', String(Date.now()));
+    location.replace(u.toString());
+  } catch (_) { location.reload(); }
 }
 
 // === 远端版本自检：解决「手机上一直跑着旧版」 ===
