@@ -1771,3 +1771,7 @@ select:focus-visible,
 .bg-file-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   cursor: pointer; user-select: none; }
 .bg-hint { margin: 6px 0 10px; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* 文件选择框：不能用 display:none / hidden —— iOS Safari 对不可见 file input
+   不认 <label for> 的关联点击（点了没反应且无报错）。留在布局里、1px、透明即可。 */
+.sr-file { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
