@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.19';
+const APP_VERSION = '4.20';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -3475,7 +3475,15 @@ if (aiModal) {
   const bgModal = $('#bgModal');
   if (bgModal) {
     const bgFileInput = $('#bgFileInput');
-    $('#bgFileBtn').addEventListener('click', () => bgFileInput.click());
+    // 按钮现在是 <label for="bgFileInput">，点击由浏览器原生唤起选择器，不用 JS 再 click 一次
+    //（那样在某些浏览器里会触发两次，或者被当作非用户手势拦掉）。
+    // 键盘可达性：label 不是按钮，Enter/Space 需要自己补一次。
+    const bgBtn = $('#bgFileBtn');
+    if (bgBtn) {
+      bgBtn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); bgFileInput.click(); }
+      });
+    }
     bgFileInput.addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
       if (f) uploadBgFile(f);
@@ -5499,6 +5507,9 @@ async function uploadBgFile(file) {
     const ou = URL.createObjectURL(file);
     setBgSrc(ou, ou);
     const urlEl = document.getElementById('bgUrl'); if (urlEl) urlEl.value = '';
+    updateBgPreview();
+    const hint = document.getElementById('bgHint');
+    if (hint) hint.textContent = '已应用：' + file.name + '（' + Math.round(file.size / 1024) + ' KB）';
     flash('背景图片已应用');
   } catch (e) {
     console.error('[bg] 保存失败', e);

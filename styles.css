@@ -1766,3 +1766,8 @@ select:focus-visible,
 @media (hover: none) {
   .menu .kbd { display: none; }
 }
+
+/* 背景图片弹窗：上传按钮改成 label 后要保证外观与按钮一致 + 提示行不抢眼 */
+.bg-file-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; user-select: none; }
+.bg-hint { margin: 6px 0 10px; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
