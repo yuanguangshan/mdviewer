@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.21';
+const APP_VERSION = '4.22';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -4324,6 +4324,14 @@ async function downloadFromNas(input) {
   try {
     const resp = await fetch(url, { headers: { 'Authorization': authHeader } });
     if (!resp.ok) {
+      // 关键兜底：uploads 里没有的文件，多半躺在「归档」目录里（knowly 按日期分目录：
+      // archive/YYYY/MM/DD/<文件名>）。用户从 Knowly 界面复制出来的往往只是一个带时间戳前缀的
+      // 文件名（如 195435_xxx.md），不知道日期 —— 这时按"今天往前 N 天"逐个试一次。
+      // 这也是那个 503「failed to get file size」最常见的来源：不是服务挂了，是文件不在这条路径下。
+      if (resp.status === 503 || resp.status === 404) {
+        const hit = await findInNasArchive(label, authHeader);
+        if (hit) { flash('已从归档取回：' + hit.path); return hit.text; }
+      }
       let msg = 'HTTP ' + resp.status;
       try { const j = await resp.json(); if (j && j.error) msg += '：' + j.error; } catch (_) {}
       throw new Error(msg);
@@ -4331,9 +4339,31 @@ async function downloadFromNas(input) {
     return await resp.text();
   } catch (e) {
     console.error(e);
-    flash('下载失败：' + e.message + '（服务端错误，检查 NAS 下载服务）');
+    const hint = /503|file size/.test(String(e.message))
+      ? '（这个文件名不在上传目录里，归档最近 14 天也没找到。请在 Knowly 里打开该文件、复制完整链接再试）'
+      : '（服务端错误，检查 NAS 下载服务）';
+    flash('下载失败：' + e.message + hint);
     return null;
   }
+}
+
+// 在 NAS 归档里按文件名找：archive/YYYY/MM/DD/<文件名>，从今天往前找 days 天。
+// 只发 HEAD 太重（服务端不支持），直接 GET 小文件；未命中的日期会快速返回 503。
+async function findInNasArchive(filename, authHeader, days) {
+  const n = days || 14;
+  const now = new Date();
+  for (let d = 0; d < n; d++) {
+    const t = new Date(now.getTime() - d * 86400000);
+    const rel = t.getFullYear() + '/' +
+      String(t.getMonth() + 1).padStart(2, '0') + '/' +
+      String(t.getDate()).padStart(2, '0') + '/' + filename;
+    const u = NAS_ARCHIVE_HOST + '/api/archive/download?path=' + encodeURIComponent(rel);
+    try {
+      const r = await fetch(u, { headers: { 'Authorization': authHeader } });
+      if (r.ok) return { path: rel, text: await r.text() };
+    } catch (_) { /* 单日失败继续找 */ }
+  }
+  return null;
 }
 
 // 解析并打开（供菜单与粘贴共用）：下载后作为独立草稿载入编辑器
