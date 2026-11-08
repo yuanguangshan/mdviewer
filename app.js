@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.24';
+const APP_VERSION = '4.25';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1010,6 +1010,313 @@ function renderMarkdown(opts) {
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
 }
+
+// === SECTION: 时光胶囊（剪贴板加密同步）===
+// 设计：配对码 → PBKDF2 → AES-GCM 密钥（只在内存）→ 密文上传 NAS；
+//      命名空间 ns 由同一配对码另派生，做文件名前缀，NAS 上只看到随机串。
+// 为什么放 mdviewer：它是 https 站点（md.want.biz），WebCrypto 与剪贴板 API 才可用；
+//      网关那套跑在 http://10.0.0.x 上，crypto.subtle 直接不存在。
+const CAP_CODE_KEY = 'cap_code';
+const CAP_DEV_KEY = 'cap_dev';
+const CAP_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';   // 去掉 0/O/1/I
+const CAP_LIST_TTL = 10 * 60 * 1000;
+
+let capKey = null;
+let capNs = '';
+let capItems = [];
+let capListCache = { at: 0, ns: '', items: [] };
+
+function capDevId() {
+  let d = '';
+  try { d = localStorage.getItem(CAP_DEV_KEY) || ''; } catch (_) {}
+  if (!/^[0-9a-z]{6}$/.test(d)) {
+    const a = new Uint8Array(4);
+    crypto.getRandomValues(a);
+    d = Array.from(a).map((b) => (b % 36).toString(36)).join('').slice(0, 6);
+    try { localStorage.setItem(CAP_DEV_KEY, d); } catch (_) {}
+  }
+  return d;
+}
+function capGenCode(n) {
+  const a = new Uint8Array(n || 10);
+  crypto.getRandomValues(a);
+  let out = '';
+  for (const b of a) out += CAP_ALPHABET[b % CAP_ALPHABET.length];
+  return out.slice(0, 5) + '-' + out.slice(5);
+}
+function capNormCode(c) { return String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function capCryptoOk() { return !!(window.isSecureContext && window.crypto && crypto.subtle); }
+function capClipboardOk() { return !!(window.isSecureContext && navigator.clipboard && navigator.clipboard.readText); }
+
+async function capDerive(code) {
+  const enc = new TextEncoder();
+  const norm = capNormCode(code);
+  const base = await crypto.subtle.importKey('raw', enc.encode(norm), 'PBKDF2', false, ['deriveBits', 'deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: enc.encode('pi-gw-capsule-key-v1|' + norm), iterations: 210000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const nsBits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: enc.encode('pi-gw-capsule-ns-v1|' + norm), iterations: 10000, hash: 'SHA-256' },
+    base, 64);
+  const ns = Array.from(new Uint8Array(nsBits)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { key, ns };
+}
+
+function capB64(buf) {
+  const b = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s);
+}
+function capUnb64(b64) {
+  const s = atob(b64);
+  const a = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+  return a;
+}
+async function capEncrypt(text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const payload = new TextEncoder().encode(JSON.stringify({ v: 1, at: Date.now(), dev: capDevId(), text }));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, capKey, payload);
+  const all = new Uint8Array(iv.length + ct.byteLength);
+  all.set(iv, 0); all.set(new Uint8Array(ct), iv.length);
+  return capB64(all);
+}
+async function capDecrypt(b64) {
+  const all = capUnb64(b64);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: all.slice(0, 12) }, capKey, all.slice(12));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+async function capAuthHeader() {
+  const auth = await ensureNasAuth('时光胶囊');
+  if (!auth) return null;
+  try { return 'Basic ' + btoa(auth); } catch (_) { return null; }
+}
+
+async function capUpload(name, dataB64, authHeader) {
+  const buf = capUnb64(dataB64);
+  const fd = new FormData();
+  fd.append('file', new Blob([buf], { type: 'application/octet-stream' }), name);
+  const r = await fetch(NAS_UPLOAD_URL, { method: 'POST', headers: { Authorization: authHeader }, body: fd });
+  if (!r.ok) throw new Error('上传失败 HTTP ' + r.status);
+  capListCache.at = 0;                       // 有新文件，列表缓存作废
+  return r.json().catch(() => ({}));
+}
+async function capDownload(name, authHeader) {
+  const r = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name), { headers: { Authorization: authHeader } });
+  if (!r.ok) throw new Error('下载失败 HTTP ' + r.status);
+  return capB64(await r.arrayBuffer());
+}
+// NAS 的 uploads 是平铺目录（2 万多个文件、2.7MB），所以服务端过滤不了，只能全量拉一次再筛，
+// 结果缓存在内存里 10 分钟——同一个会话里连点几次同步不会反复拉。
+async function capListNs(ns, authHeader) {
+  if (capListCache.at && capListCache.ns === ns && Date.now() - capListCache.at < CAP_LIST_TTL) {
+    return capListCache.items;
+  }
+  const r = await fetch(NAS_ARCHIVE_HOST + '/api/archive/list?path=uploads', { headers: { Authorization: authHeader } });
+  if (!r.ok) throw new Error('列目录失败 HTTP ' + r.status);
+  const all = await r.json();
+  const prefix = 'cap_' + ns + '_c_';
+  const items = (Array.isArray(all) ? all : [])
+    .filter((x) => !x.is_dir && String(x.name || '').startsWith(prefix))
+    .map((x) => ({ name: x.name, size: x.size, t: x.mod_time }));
+  capListCache = { at: Date.now(), ns, items };
+  return items;
+}
+
+function capLoadCache() {
+  try {
+    const raw = localStorage.getItem('cap_cache_' + capNs);
+    capItems = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(capItems)) capItems = [];
+  } catch (_) { capItems = []; }
+}
+function capSaveCache() {
+  try {
+    const keep = capItems.slice().sort((a, b) => b.at - a.at).slice(0, 100);
+    localStorage.setItem('cap_cache_' + capNs, JSON.stringify(keep));
+  } catch (_) {}
+}
+
+function capSetReady(on) {
+  const c = document.getElementById('capCollect');
+  const sy = document.getElementById('capSync');
+  if (c) c.disabled = !on;
+  if (sy) sy.disabled = !on;
+}
+
+function capRender() {
+  const box = document.getElementById('capList');
+  if (!box) return;
+  if (!capItems.length) {
+    box.innerHTML = '<div class="cap-empty">还没有胶囊。点「收集剪贴板」存第一条。</div>';
+    return;
+  }
+  box.innerHTML = '';
+  capItems.slice().sort((a, b) => b.at - a.at).forEach((it) => {
+    const d = document.createElement('div');
+    d.className = 'cap-item';
+    const w = new Date(it.at);
+    const when = (w.getMonth() + 1) + '月' + w.getDate() + '日 ' +
+      String(w.getHours()).padStart(2, '0') + ':' + String(w.getMinutes()).padStart(2, '0');
+    d.innerHTML = '<div class="ch"><b></b><span></span><span></span></div>' +
+      '<div class="ct"></div><div class="cf">' +
+      '<button type="button" data-copy>复制</button><button type="button" data-open>展开</button></div>';
+    const ch = d.querySelectorAll('.ch span');
+    d.querySelector('.ch b').textContent = when;
+    ch[0].textContent = '设备 ' + (it.dev || '?');
+    ch[1].textContent = it.text.length + ' 字';
+    d.querySelector('.ct').textContent = it.text;
+    d.querySelector('[data-copy]').onclick = (e) => {
+      e.stopPropagation();
+      copyToClipboard(it.text).then(() => flash('已复制'), () => flash('复制失败'));
+    };
+    d.querySelector('[data-open]').onclick = (e) => {
+      e.stopPropagation();
+      d.classList.toggle('open');
+      e.target.textContent = d.classList.contains('open') ? '收起' : '展开';
+    };
+    box.appendChild(d);
+  });
+}
+
+async function capSync(silent) {
+  if (!capKey) return;
+  const auth = await capAuthHeader();
+  if (!auth) return;
+  if (!silent) flash('同步中…');
+  try {
+    const items = await capListNs(capNs, auth);
+    const have = new Set(capItems.map((x) => x.name));
+    const todo = items.filter((x) => !have.has(x.name));
+    let added = 0;
+    for (const it of todo) {
+      try {
+        const data = await capDownload(it.name, auth);
+        const p = await capDecrypt(data);
+        capItems.push({ name: it.name, at: p.at, dev: p.dev, text: p.text });
+        added++;
+      } catch (_) { /* 别的配对码的文件，解不开就跳过 */ }
+    }
+    capSaveCache();
+    capRender();
+    if (!silent) flash(added ? ('同步完成：新增 ' + added + ' 条') : '已是最新');
+  } catch (e) {
+    if (!silent) flash('同步失败：' + e.message);
+  }
+}
+
+async function capSaveText(text) {
+  text = String(text || '').trim();
+  if (!text) { flash('没有内容'); return; }
+  const auth = await capAuthHeader();
+  if (!auth) return;
+  try {
+    const data = await capEncrypt(text);
+    const name = 'cap_' + capNs + '_c_' + capDevId() + '_' + Date.now().toString(36) + '.bin';
+    await capUpload(name, data, auth);
+    capItems.push({ name, at: Date.now(), dev: capDevId(), text });
+    capSaveCache();
+    capRender();
+    flash('已存入胶囊（' + text.length + ' 字）');
+  } catch (e) {
+    flash('保存失败：' + e.message);
+  }
+}
+
+async function capCollect() {
+  if (!capKey) return;
+  const paste = document.getElementById('capPaste');
+  if (!capClipboardOk()) {
+    paste.hidden = false;
+    const ta = document.getElementById('capPasteBox');
+    ta.value = ''; ta.focus();
+    flash('当前环境不允许脚本读剪贴板，长按输入框粘贴即可');
+    return;
+  }
+  try {
+    const t = await navigator.clipboard.readText();
+    await capSaveText(t);
+  } catch (_) {
+    paste.hidden = false;
+    document.getElementById('capPasteBox').focus();
+    flash('读取剪贴板被拒绝，请长按输入框粘贴');
+  }
+}
+
+async function capConnect(code) {
+  if (!capCryptoOk()) {
+    flash('这个功能需要 https 打开（当前环境没有 WebCrypto）');
+    return;
+  }
+  const norm = capNormCode(code);
+  if (norm.length < 8) { flash('配对码至少 8 位'); return; }
+  flash('正在派生密钥…');
+  const k = await capDerive(code);
+  capKey = k.key;
+  capNs = k.ns;
+  try { localStorage.setItem(CAP_CODE_KEY, code); } catch (_) {}
+  document.getElementById('capSetup').hidden = true;
+  document.getElementById('capNs').textContent = 'ns ' + capNs.slice(0, 8) + '…';
+  capSetReady(true);
+  capLoadCache();
+  capRender();
+  capSync(true);
+}
+
+function capOpen() {
+  const m = document.getElementById('capModal');
+  if (!m) return;
+  m.hidden = false;
+  document.getElementById('capPaste').hidden = true;
+  let saved = '';
+  try { saved = localStorage.getItem(CAP_CODE_KEY) || ''; } catch (_) {}
+  if (saved && capCryptoOk()) { capConnect(saved); }
+  else {
+    document.getElementById('capSetup').hidden = false;
+    document.getElementById('capCode').value = capCryptoOk() ? capGenCode(10) : '';
+    capSetReady(false);
+    if (!capCryptoOk()) flash('这个功能需要 https 打开（当前环境没有 WebCrypto）');
+  }
+}
+
+function capBind() {
+  const m = document.getElementById('capModal');
+  if (!m) return;
+  document.getElementById('capDone').addEventListener('click', () => { m.hidden = true; });
+  m.addEventListener('click', (e) => { if (e.target === m) m.hidden = true; });
+  document.getElementById('capCollect').addEventListener('click', capCollect);
+  document.getElementById('capSync').addEventListener('click', () => capSync(false));
+  document.getElementById('capGen').addEventListener('click', () => {
+    document.getElementById('capCode').value = capGenCode(10);
+    flash('已生成配对码，记下来');
+  });
+  document.getElementById('capSave').addEventListener('click', () => {
+    const v = document.getElementById('capCode').value.trim();
+    if (!v) { flash('先输入或生成配对码'); return; }
+    capConnect(v);
+  });
+  document.getElementById('capForget').addEventListener('click', () => {
+    try {
+      localStorage.removeItem(CAP_CODE_KEY);
+      localStorage.removeItem('cap_cache_' + capNs);
+    } catch (_) {}
+    capKey = null; capNs = ''; capItems = [];
+    capSetReady(false);
+    document.getElementById('capSetup').hidden = false;
+    document.getElementById('capCode').value = capGenCode(10);
+    capRender();
+    flash('已忘记这台设备的配对');
+  });
+  document.getElementById('capPasteSave').addEventListener('click', async () => {
+    await capSaveText(document.getElementById('capPasteBox').value);
+    document.getElementById('capPasteBox').value = '';
+    document.getElementById('capPaste').hidden = true;
+  });
+}
+
+capBind();
 
 // === SECTION: 锚点同步滚动辅助 ===
 let lastSanitizedHtml = '';
@@ -4762,6 +5069,7 @@ function handleDataAct(act, btn) {
   else if (act === 'layout-swap') toggleLayoutSwap();
   else if (act === 'layout-reset') resetLayout();
   else if (act === 'bg') openBgDialog();
+  else if (act === 'capsule') capOpen();
   else if (act === 'fb-customize') openFbCustomize();
   else if (act === 'backup-export') exportBackup();
   else if (act === 'backup-import') importBackup();

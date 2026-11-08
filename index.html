@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0f1115" />
   <!-- app-version：与 app.js 里的 APP_VERSION 比对，缓存错位时给出明确提示 -->
-  <meta name="app-version" content="4.24" />
+  <meta name="app-version" content="4.25" />
   <meta name="description" content="雨轩编辑器（mdviewer）：本地优先、离线可用的 PWA Markdown 写作工具，支持实时预览、数学公式、图表、AI 续写与文库同步。" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="雨轩编辑器 mdviewer" />
@@ -17,7 +17,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./styles.css?v=4.24" />
+  <link rel="stylesheet" href="./styles.css?v=4.25" />
   <!-- 防 FOUC：在 body 出现前尽早按「本地偏好 → 系统主题」着色 -->
   <script>
     (function () {
@@ -32,13 +32,13 @@
     })();
   </script>
   <!-- 第三方库已本地化（vendor/），确保完全离线可用；小库 defer 并行下载不阻塞解析 -->
-  <script defer src="./vendor/marked.min.js?v=4.24"></script>
-  <script defer src="./vendor/highlight.min.js?v=4.24"></script>
-  <script defer src="./vendor/purify.min.js?v=4.24"></script>
+  <script defer src="./vendor/marked.min.js?v=4.25"></script>
+  <script defer src="./vendor/highlight.min.js?v=4.25"></script>
+  <script defer src="./vendor/purify.min.js?v=4.25"></script>
   <!-- 纯函数内核（可被 node --test 单测）；必须早于 app.js 加载 -->
-  <script defer src="./lib/md-core.js?v=4.24"></script>
+  <script defer src="./lib/md-core.js?v=4.25"></script>
   <!-- 取文安检规则（与 ops/serve-web.js、worker 共用同一份，前端只用于预检 + 错误文案） -->
-  <script defer src="./lib/fetch-guard.js?v=4.24"></script>
+  <script defer src="./lib/fetch-guard.js?v=4.25"></script>
   <!-- mermaid / html2pdf 体积大（合计 ~4MB）且非首屏必需，改为按需懒加载（见 app.js），不再这里同步加载 -->
 </head>
 <body>
@@ -120,6 +120,7 @@
             <div class="menu-label" role="presentation">同步与备份</div>
             <button role="menuitem" data-act="nas-upload">📤 存到 NAS</button>
             <button role="menuitem" data-act="nas-download">📥 从 NAS 取回</button>
+            <button role="menuitem" data-act="capsule" title="把剪贴板内容加密后同步到配对的设备（配对码相同即可见）">⏳ 时光胶囊</button>
             <button role="menuitem" data-act="fetch-url" title="粘贴任意 https 网址，以只读方式渲染其中的 Markdown">🌐 从网址打开（只读）</button>
             <button role="menuitem" data-act="backup-export" title="把整个文库（含图片）打包成 zip 下载">📦 备份全库（.zip）</button>
             <button role="menuitem" data-act="backup-import" title="从备份 zip 恢复文档与图片">♻️ 从备份恢复</button>
@@ -245,7 +246,7 @@
       <span id="readInfo" hidden>0 字 · 0 分</span>
       <span id="saveState">就绪</span>
       <span id="syncDot" class="sync-dot" data-state="idle" title="NAS 同步：就绪"></span>
-      <span class="version">v4.24</span>
+      <span class="version">v4.25</span>
     </footer>
     <button id="btnFullscreen" class="fs-float" title="全屏" aria-label="全屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg></button>
     <button id="btnExitFullscreen" class="exit-fs" hidden title="退出全屏 (Esc)" aria-label="退出全屏">✕</button>
@@ -545,6 +546,43 @@
   </div>
   <input type="file" id="bgFileInput" accept="image/*" class="sr-file" />
 
+  <!-- 时光胶囊：剪贴板内容用配对码加密后经 NAS 同步（服务端只存密文） -->
+  <div class="modal" id="capModal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="时光胶囊">
+      <div class="modal-title">⏳ 时光胶囊</div>
+      <p class="modal-desc">剪贴板内容用配对码加密后再存 NAS：服务端与 NAS 都看不到明文。其他设备输入同一个配对码即可看到同一条时间线。</p>
+
+      <div class="cap-bar">
+        <button id="capCollect" type="button" class="btn primary" disabled>📋 收集剪贴板</button>
+        <button id="capSync" type="button" class="btn" disabled>↻ 同步</button>
+        <span class="cap-ns" id="capNs"></span>
+      </div>
+
+      <div class="cap-paste" id="capPaste" hidden>
+        <textarea id="capPasteBox" placeholder="长按这里粘贴剪贴板内容…" spellcheck="false"></textarea>
+        <button id="capPasteSave" type="button" class="btn primary">存为胶囊</button>
+      </div>
+
+      <div id="capSetup">
+        <label for="capCode">配对码</label>
+        <div class="cap-code-row">
+          <input id="capCode" type="text" placeholder="输入或粘贴配对码（8-16 位）" spellcheck="false" autocomplete="off" />
+          <button id="capGen" type="button" class="btn">生成</button>
+        </div>
+        <div class="cap-actions">
+          <button id="capSave" type="button" class="btn primary">保存并连接</button>
+          <button id="capForget" type="button" class="btn">忘记这台设备</button>
+        </div>
+      </div>
+
+      <div class="cap-list" id="capList"></div>
+
+      <div class="modal-actions">
+        <button id="capDone" type="button" class="primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 正文字号与颜色弹窗：仅影响预览正文，不改 Markdown 源文件 -->
   <div class="modal" id="textStyleModal" hidden>
     <div class="modal-box" role="dialog" aria-modal="true" aria-label="正文字号与颜色">
@@ -586,6 +624,6 @@
     </div>
   </div>
 
-  <script defer src="./app.js?v=4.24"></script>
+  <script defer src="./app.js?v=4.25"></script>
 </body>
 </html>
