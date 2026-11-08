@@ -1802,3 +1802,10 @@ select:focus-visible,
 .cap-item .cf button { font-size:12px; padding:4px 9px; border-radius:7px;
   border:1px solid var(--border); background:var(--bg-elev); color:var(--text); cursor:pointer; }
 .cap-empty { color:var(--text-dim); font-size:13px; text-align:center; padding:18px 0; }
+
+/* 时光胶囊：配对码常显行 */
+.cap-code-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 8px;
+  font-size:12.5px; color:var(--text-dim); }
+.cap-code-line b { color:var(--text); font-family:var(--mono); font-size:13.5px; letter-spacing:.5px; }
+.cap-mini { font-size:11.5px; padding:3px 8px; border-radius:6px; cursor:pointer;
+  border:1px solid var(--border); background:var(--bg-elev); color:var(--text); }

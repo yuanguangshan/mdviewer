@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.25';
+const APP_VERSION = '4.26';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1088,6 +1088,15 @@ async function capDecrypt(b64) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
+// 复制：优先 navigator.clipboard（https 下可用），失败回退 execCommand
+function capCopy(txt) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(txt).catch(() => fallbackCopy(txt));
+  }
+  fallbackCopy(txt);
+  return Promise.resolve();
+}
+
 async function capAuthHeader() {
   const auth = await ensureNasAuth('时光胶囊');
   if (!auth) return null;
@@ -1170,7 +1179,7 @@ function capRender() {
     d.querySelector('.ct').textContent = it.text;
     d.querySelector('[data-copy]').onclick = (e) => {
       e.stopPropagation();
-      copyToClipboard(it.text).then(() => flash('已复制'), () => flash('复制失败'));
+      capCopy(it.text).then(() => flash('已复制'), () => flash('复制失败'));
     };
     d.querySelector('[data-open]').onclick = (e) => {
       e.stopPropagation();
@@ -1259,6 +1268,9 @@ async function capConnect(code) {
   try { localStorage.setItem(CAP_CODE_KEY, code); } catch (_) {}
   document.getElementById('capSetup').hidden = true;
   document.getElementById('capNs').textContent = 'ns ' + capNs.slice(0, 8) + '…';
+  // 配对码要一直看得见：第二台设备就是靠它接入的，藏起来等于让用户靠记忆
+  const show = document.getElementById('capCodeShow');
+  if (show) show.textContent = capFmtCode(code);
   capSetReady(true);
   capLoadCache();
   capRender();
@@ -1281,11 +1293,29 @@ function capOpen() {
   }
 }
 
+// 配对码展示格式：5-5 分组（存储里可能是连着的，展示时统一）
+function capFmtCode(code) {
+  const n = capNormCode(code);
+  return n.length > 5 ? n.slice(0, 5) + '-' + n.slice(5) : n;
+}
+
 function capBind() {
   const m = document.getElementById('capModal');
   if (!m) return;
   document.getElementById('capDone').addEventListener('click', () => { m.hidden = true; });
   m.addEventListener('click', (e) => { if (e.target === m) m.hidden = true; });
+  const copyCode = document.getElementById('capCodeCopy');
+  if (copyCode) copyCode.addEventListener('click', () => {
+    const cur = document.getElementById('capCodeShow').textContent;
+    if (!cur || cur === '—') { flash('还没有配对码'); return; }
+    capCopy(cur).then(() => flash('配对码已复制，另一台设备粘进去即可'), () => flash('复制失败'));
+  });
+  const changeCode = document.getElementById('capCodeChange');
+  if (changeCode) changeCode.addEventListener('click', () => {
+    document.getElementById('capSetup').hidden = false;
+    document.getElementById('capCode').value = document.getElementById('capCodeShow').textContent.replace('—', '');
+    flash('改完点「保存并连接」生效（旧配对码的胶囊不会跟过来）');
+  });
   document.getElementById('capCollect').addEventListener('click', capCollect);
   document.getElementById('capSync').addEventListener('click', () => capSync(false));
   document.getElementById('capGen').addEventListener('click', () => {
@@ -1303,6 +1333,8 @@ function capBind() {
       localStorage.removeItem('cap_cache_' + capNs);
     } catch (_) {}
     capKey = null; capNs = ''; capItems = [];
+    const show = document.getElementById('capCodeShow');
+    if (show) show.textContent = '—';
     capSetReady(false);
     document.getElementById('capSetup').hidden = false;
     document.getElementById('capCode').value = capGenCode(10);
