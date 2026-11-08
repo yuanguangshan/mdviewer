@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.22';
+const APP_VERSION = '4.24';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -4329,6 +4329,11 @@ async function downloadFromNas(input) {
       // 文件名（如 195435_xxx.md），不知道日期 —— 这时按"今天往前 N 天"逐个试一次。
       // 这也是那个 503「failed to get file size」最常见的来源：不是服务挂了，是文件不在这条路径下。
       if (resp.status === 503 || resp.status === 404) {
+        // ① 先问 Knowly 搜索（按文件名精确匹配，不受日期限制）
+        const tok = await ensureKnowlyToken();
+        const bySearch = await findViaKnowlySearch(label, tok);
+        if (bySearch) { flash('已通过 Knowly 搜索取回：' + bySearch.path); return bySearch.text; }
+        // ② 搜索不可用（没 token / 没命中）→ 退回按日期扫最近 14 天
         const hit = await findInNasArchive(label, authHeader);
         if (hit) { flash('已从归档取回：' + hit.path); return hit.text; }
       }
@@ -4345,6 +4350,96 @@ async function downloadFromNas(input) {
     flash('下载失败：' + e.message + hint);
     return null;
   }
+}
+
+// Knowly 全文检索：按文件名精确找回归档路径（比"按日期盲扫"快得多，且不受天数限制）。
+// 认证是 Bearer token（跟上传/下载的 Basic 是两套），所以单独存一个 localStorage 键。
+// 绝不把 token 写进源码——这个仓库是公开的。
+const KNOWLY_SEARCH_HOST = 'https://knowly.want.biz';
+
+function getKnowlyToken() {
+  try { return localStorage.getItem('knowly-token') || ''; } catch (_) { return ''; }
+}
+
+// 没有 token 时问一次，允许跳过（跳过就退回按日期扫描，功能不受影响）
+async function ensureKnowlyToken() {
+  const had = getKnowlyToken();
+  if (had) return had;
+  const v = await askInput('粘贴 Knowly 搜索 token（knowly.want.biz 的 Bearer token，仅本机保存；留空则跳过）', { password: true });
+  if (!v) return null;
+  try { localStorage.setItem('knowly-token', v.trim()); } catch (_) {}
+  return v.trim();
+}
+
+// 文件名 → 归档路径 的本机缓存：同一个文件反复取时省掉一次搜索（搜索要 1~3 秒）
+const KNOWLY_PATH_KEY = 'knowly-path-cache';
+function rememberKnowlyPath(filename, p) {
+  try {
+    const m = JSON.parse(localStorage.getItem(KNOWLY_PATH_KEY) || '{}');
+    m[filename] = p;
+    const keys = Object.keys(m);
+    if (keys.length > 200) delete m[keys[0]];      // 只留最近 200 条
+    localStorage.setItem(KNOWLY_PATH_KEY, JSON.stringify(m));
+  } catch (_) {}
+}
+function recallKnowlyPath(filename) {
+  try { return (JSON.parse(localStorage.getItem(KNOWLY_PATH_KEY) || '{}'))[filename] || ''; } catch (_) { return ''; }
+}
+
+async function findViaKnowlySearch(filename, token) {
+  if (!token) return null;
+  // Knowly 是全文检索：直接拿带时间戳前缀的文件名去搜，命中的往往是"正文里提到它"的别的文档
+  // （实测：搜 195435_xxx 返回的是 205341_Knowly.md）。所以去掉前缀再搜一次，并放宽匹配规则。
+  // 查询词要"去前缀 + 去扩展名"：实测带 .md 搜只有 1 条（命中的还是提到它的别的文档），
+  // 去掉扩展名搜「监控体系开发文档」才返回目标文件本身。所以三种形态都试一遍，去重后按序。
+  // 先查缓存：命中就直接取原文，跳过搜索
+  const cached = recallKnowlyPath(filename);
+  if (cached) {
+    try {
+      const r = await fetch(KNOWLY_SEARCH_HOST + '/api/v1/entry?path=' + encodeURIComponent(cached),
+        { headers: { Authorization: 'Bearer ' + token } });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && typeof j.content === 'string') return { path: cached, text: j.content };
+      }
+    } catch (_) { /* 缓存失效就走搜索 */ }
+  }
+  const bare = String(filename).replace(/^\d{6}_/, '');
+  const title = bare.replace(/\.[^.]+$/, '');
+  // 顺序按命中率排：标题 > 去前缀名 > 原始文件名（越靠前越省时间）
+  const queries = [title, bare, filename].filter((q, i, a) => q && a.indexOf(q) === i);
+  const seen = new Set();
+  for (const q of queries) {
+    let results = [];
+    try {
+      const u = KNOWLY_SEARCH_HOST + '/api/v1/search?q=' + encodeURIComponent(q) + '&limit=20';
+      const r = await fetch(u, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) continue;
+      const j = await r.json();
+      results = (j && j.results) || [];
+    } catch (_) { continue; }
+    for (const hit of results) {
+      const p = String(hit.path || '');
+      const base = p.split('/').pop();
+      if (seen.has(p)) continue;
+      seen.add(p);
+      // 三档匹配，从严到宽：完全同名 → 带时间戳前缀的同名 → 以 "_<裸名>" 结尾
+      const stripped = base.replace(/^\d{6}_/, '');
+      const ok = base === filename || base === bare || stripped === bare || stripped === title;
+      if (!ok) continue;
+      try {
+        const e = await fetch(KNOWLY_SEARCH_HOST + '/api/v1/entry?path=' + encodeURIComponent(p),
+          { headers: { Authorization: 'Bearer ' + token } });
+        if (!e.ok) continue;
+        const ej = await e.json();
+        if (ej && typeof ej.content === 'string') {
+          rememberKnowlyPath(filename, p);   // 下次同名文件直接取，省掉搜索
+          return { path: p, text: ej.content };
+        }
+      } catch (_) {}
+    }
+  }
+  return null;
 }
 
 // 在 NAS 归档里按文件名找：archive/YYYY/MM/DD/<文件名>，从今天往前找 days 天。
