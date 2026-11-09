@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.29';
+const APP_VERSION = '4.31';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1115,15 +1115,26 @@ async function capReadIndex(auth) {
   const j = await capGetJson(capIdxName(), auth);
   return (j && Array.isArray(j.items)) ? j.items : null;
 }
+// 索引项的字段：{ id, at, dev, del? }。del=1 是「墓碑」——表示这条已被某台设备删除。
+// 为什么要墓碑而不是直接删文件：NAS 没有删除接口（探测过 /api/archive/delete 等全 404），
+// 所以只能靠索引里的标记让所有设备都忽略它。代价是 NAS 上会留几十字节的孤儿文件。
+function capIdxPick(it, prev) {
+  const base = prev || {};
+  const r = { id: it.id, at: it.at || base.at || 0, dev: it.dev || base.dev || '' };
+  if (it.del || base.del) r.del = 1;      // 墓碑一旦写下就不会被后来的「新增」覆盖
+  return r;
+}
 async function capWriteIndex(items, auth) {
   const uniq = new Map();
-  for (const it of items) if (it && it.id) uniq.set(it.id, { id: it.id, at: it.at || 0, dev: it.dev || '' });
-  const list = Array.from(uniq.values()).sort((a, b) => a.at - b.at).slice(-500);
+  for (const it of items) if (it && it.id) uniq.set(it.id, capIdxPick(it, uniq.get(it.id)));
+  const list = Array.from(uniq.values()).sort((a, b) => a.at - b.at).slice(-800);
   await capPutJson(capIdxName(), { v: 1, items: list }, auth);
 }
 async function capMergeIndex(newItems, auth) {
   const cur = (await capReadIndex(auth)) || [];
-  await capWriteIndex(cur.concat(newItems), auth);
+  const map = new Map();
+  for (const it of cur.concat(newItems)) if (it && it.id) map.set(it.id, capIdxPick(it, map.get(it.id)));
+  await capWriteIndex(Array.from(map.values()), auth);
 }
 
 // 兜底：索引丢了就扫目录（uploads 是平铺两万多个文件、2.7MB，5~8 秒，只在深度同步时用）
@@ -1179,7 +1190,8 @@ function capRender() {
       String(w.getHours()).padStart(2, '0') + ':' + String(w.getMinutes()).padStart(2, '0');
     d.innerHTML = '<div class="ch"><b></b><span></span><span></span></div>' +
       '<div class="ct"></div><div class="cf">' +
-      '<button type="button" data-copy>复制</button><button type="button" data-open>展开</button></div>';
+      '<button type="button" data-copy>复制</button><button type="button" data-open>展开</button>' +
+      '<button type="button" class="cap-del" data-del>删除</button></div>';
     const ch = d.querySelectorAll('.ch span');
     d.querySelector('.ch b').textContent = when;
     ch[0].textContent = '设备 ' + (it.dev || '?');
@@ -1194,6 +1206,10 @@ function capRender() {
       d.classList.toggle('open');
       e.target.textContent = d.classList.contains('open') ? '收起' : '展开';
     };
+    d.querySelector('[data-del]').onclick = (e) => {
+      e.stopPropagation();
+      capDelete(it);
+    };
     box.appendChild(d);
   });
 }
@@ -1206,15 +1222,36 @@ async function capSync(silent, deep) {
   try {
     const flushed = await capFlushPending(auth);
     let items = [];
+    let needDeep = false;
+    const tombstones = new Set();
     if (!deep) {
       const idx = await capReadIndex(auth);
-      if (idx) items = idx.map((x) => ({ name: x.id }));
+      if (idx) {
+        for (const x of idx) {
+          if (x.del) tombstones.add(x.id);
+          else items.push({ name: x.id });
+        }
+      } else needDeep = true;
     }
-    if (deep || !items.length) {
+    // 应用墓碑：本机有、但别的设备已删除的，这里也移除
+    if (tombstones.size) {
+      const before = capItems.length;
+      capItems = capItems.filter((x) => !tombstones.has(x.name));
+      if (capItems.length !== before) { capSaveCache(); capRender(); }
+    }
+    // 只有「用户明确点深度同步」才扫目录。
+    // 为什么不再自动扫：/api/archive/list?path=uploads 会让 knowly 对两万个文件批量提标题
+    // （BatchExtractTitles 每个文件开一次 SSH session），并发撞上重连就 panic 整个请求
+    // （见 ssh/client.go:1185 → :170 → x/crypto/ssh client.go:135 nil pointer）。
+    // 所以默认路径必须绕开它。
+    if (deep) {
       items = await capListNs(auth, true);
       if (items.length) {
         capMergeIndex(items.map((x) => ({ id: x.name, at: 0, dev: '' })), auth).catch(() => {});
       }
+    } else if (needDeep) {
+      if (!silent) flash('这台设备还没索引：先点一次「深度」，之后就走秒同步了');
+      return;
     }
     const have = new Set(capItems.map((x) => x.name));
     const todo = items.filter((x) => !have.has(x.name));
@@ -1292,6 +1329,28 @@ async function capSaveText(text) {
   }
 }
 
+// 删除一条胶囊：写墓碑进索引 → 本机移除。其他设备下次同步会自动消失。
+async function capDelete(it) {
+  if (!capCode) return;
+  if (!confirm('从所有设备的时间线里删除这一条？\n\nNAS 上的文件会保留（服务端没有删除接口），只是不再显示。')) return;
+  const auth = await capAuthHeader();
+  if (!auth) return;
+  flash('删除中…');
+  try {
+    const cur = (await capReadIndex(auth)) || [];
+    const found = cur.some((x) => x.id === it.name);
+    const next = cur.map((x) => (x.id === it.name ? capIdxPick(x, { del: 1 }) : x));
+    if (!found) next.push({ id: it.name, at: it.at || 0, dev: it.dev || '', del: 1 });
+    await capWriteIndex(next, auth);
+    capItems = capItems.filter((x) => x.name !== it.name);
+    capSaveCache();
+    capRender();
+    flash('已删除（其他设备下次同步也会消失）');
+  } catch (e) {
+    flash('删除失败：' + (e && e.message ? e.message : e));
+  }
+}
+
 async function capCollect() {
   if (!capCode) return;
   const paste = document.getElementById('capPaste');
@@ -1365,7 +1424,10 @@ function capBind() {
   document.getElementById('capCollect').addEventListener('click', capCollect);
   document.getElementById('capSync').addEventListener('click', () => capSync(false));
   const deepBtn = document.getElementById('capDeep');
-  if (deepBtn) deepBtn.addEventListener('click', () => capSync(false, true));
+  if (deepBtn) deepBtn.addEventListener('click', () => {
+    if (!confirm('深度同步会扫描 NAS 上传目录（两万多个文件，较慢，且会给 Knowly 造成压力）。\n\n只在换新设备或索引丢失时用，平时点「同步」即可。继续？')) return;
+    capSync(false, true);
+  });
   const copyCode = document.getElementById('capCodeCopy');
   if (copyCode) copyCode.addEventListener('click', () => {
     const cur = document.getElementById('capCodeShow').textContent;

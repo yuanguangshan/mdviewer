@@ -1801,6 +1801,9 @@ select:focus-visible,
 .cap-item .cf { display:flex; gap:8px; margin-top:6px; }
 .cap-item .cf button { font-size:12px; padding:4px 9px; border-radius:7px;
   border:1px solid var(--border); background:var(--bg-elev); color:var(--text); cursor:pointer; }
+/* 删除放最右、颜色弱化：避免误点，但要点得到 */
+.cap-item .cf .cap-del { margin-left:auto; color:#e06c75; border-color:rgba(224,108,117,.35); }
+.cap-item .cf .cap-del:hover { background:rgba(224,108,117,.12); }
 .cap-empty { color:var(--text-dim); font-size:13px; text-align:center; padding:18px 0; }
 
 /* 时光胶囊：配对码常显行 */
