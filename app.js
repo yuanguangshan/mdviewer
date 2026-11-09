@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.31';
+const APP_VERSION = '4.33';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1103,7 +1103,9 @@ async function capGetJson(name, authHeader) {
   // 浏览器会把它报成 TypeError: Failed to fetch（看起来像网络坏了）。
   // 所以这里整段包 try/catch，统一按"没有这个文件"处理。
   try {
-    const r = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name), { headers: { Authorization: authHeader } });
+    // cache: 'no-store' —— 删除后同一 URL 仍可能命中浏览器缓存，导致"删了还能读出来"。
+    const r = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name),
+      { headers: { Authorization: authHeader }, cache: 'no-store' });
     if (!r.ok) return null;
     return JSON.parse(await r.text());
   } catch (_) { return null; }
@@ -1329,13 +1331,32 @@ async function capSaveText(text) {
   }
 }
 
-// 删除一条胶囊：写墓碑进索引 → 本机移除。其他设备下次同步会自动消失。
+// 删除一条胶囊：先删 NAS 上的文件（2026-11-09 起 knowly 支持了），再写墓碑让其他设备也移除。
+// 两步都做：真删保证 NAS 干净；墓碑保证别的设备时间线不会因为本地缓存还留着这条。
+// 真删失败（旧版 knowly / 网络问题）不算致命——退回纯墓碑，功能不受影响。
 async function capDelete(it) {
   if (!capCode) return;
-  if (!confirm('从所有设备的时间线里删除这一条？\n\nNAS 上的文件会保留（服务端没有删除接口），只是不再显示。')) return;
+  if (!confirm('删除这一条？\n\n会从 NAS 上删掉文件，其他设备下次同步也会消失。')) return;
   const auth = await capAuthHeader();
   if (!auth) return;
   flash('删除中…');
+
+  let purged = false;
+  try {
+    const r = await fetch(NAS_DELETE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: auth },
+      body: JSON.stringify({ path: 'uploads/' + it.name }),
+    });
+    purged = r.ok;
+    if (!r.ok && r.status !== 404) {
+      const j = await r.json().catch(() => ({}));
+      console.warn('[cap] 真删失败，退回墓碑：', r.status, j.error || '');
+    }
+  } catch (e) {
+    console.warn('[cap] 真删请求异常，退回墓碑：', e.message);
+  }
+
   try {
     const cur = (await capReadIndex(auth)) || [];
     const found = cur.some((x) => x.id === it.name);
@@ -1345,9 +1366,13 @@ async function capDelete(it) {
     capItems = capItems.filter((x) => x.name !== it.name);
     capSaveCache();
     capRender();
-    flash('已删除（其他设备下次同步也会消失）');
+    flash(purged ? '已删除（NAS 文件已清除）' : '已从时间线移除（NAS 文件未能删除，仅隐藏）');
   } catch (e) {
-    flash('删除失败：' + (e && e.message ? e.message : e));
+    // 索引写失败：至少本机先移除，下次同步会重新出现（可接受）
+    capItems = capItems.filter((x) => x.name !== it.name);
+    capSaveCache();
+    capRender();
+    flash('本机已移除，但同步索引失败：' + (e && e.message ? e.message : e));
   }
 }
 
@@ -4633,6 +4658,8 @@ const NAS_UPLOAD_URL = 'https://upload.want.biz/api/upload';
 const NAS_DOWNLOAD_URL = 'https://upload.want.biz/api/uploads/download';
 const NAS_ARCHIVE_DOMAIN = 'knowly.want.biz';
 const NAS_ARCHIVE_HOST = 'https://knowly.want.biz';
+// 2026-11-09 knowly 新增的真删接口（此前没有任何删除能力，只能写墓碑隐藏）
+const NAS_DELETE_URL = 'https://upload.want.biz/api/archive/delete';
 const NAS_MAX_BYTES = 200 * 1024 * 1024;
 
 // NAS 菜单提示：凭据已配置（localStorage 'nas-auth' 非空）则不标注；未配置才显示「（需凭据）」
