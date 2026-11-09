@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.33';
+const APP_VERSION = '4.35';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1170,7 +1170,7 @@ function capSaveCache() {
 }
 
 function capSetReady(on) {
-  ['capCollect', 'capSync', 'capDeep'].forEach((id) => {
+  ['capCollect', 'capSync', 'capDeep', 'capGc'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.disabled = !on;
   });
@@ -1331,6 +1331,70 @@ async function capSaveText(text) {
   }
 }
 
+// 通用：删 NAS 上的一个文件（相对 uploads 的路径或裸文件名）。
+// 返回 {ok, status, error}，调用方自己决定怎么提示——胶囊删除和垃圾清理都用它。
+async function nasDeleteFile(name, authHeader) {
+  const path = name.indexOf('/') >= 0 ? name : 'uploads/' + name;
+  try {
+    const r = await fetch(NAS_DELETE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ path }),
+    });
+    if (r.ok) return { ok: true };
+    const j = await r.json().catch(() => ({}));
+    return { ok: false, status: r.status, error: j.error || ('HTTP ' + r.status) };
+  } catch (e) {
+    return { ok: false, status: 0, error: e.message };
+  }
+}
+
+// 清理 NAS 上这个配对码的垃圾文件：
+//   ① 旧索引副本 cap_<ns>_idx_YYYYMMDD_HHMMSS.json —— NAS 每次覆盖同名文件都会把旧版改名归档，
+//      写 N 次索引就留 N 个副本，纯垃圾（刚才实测一个配对码就攒了 9 个）；
+//   ② 已删除（墓碑）胶囊对应的孤儿文件 —— 删除时真删失败才留下的。
+// 只清理本配对码的，绝不碰别的命名空间。
+async function capGc() {
+  if (!capCode) return;
+  const auth = await capAuthHeader();
+  if (!auth) return;
+  if (!confirm('清理这个配对码在 NAS 上的垃圾文件？\n\n· 旧索引副本（每次覆盖都会留一个）\n· 已删除胶囊的孤儿文件\n\n正常胶囊不受影响。')) return;
+  flash('正在扫描…');
+  try {
+    // 注意：这里不能用 capListNs —— 它内部只保留 cap_<ns>_c_ 前缀（胶囊），
+    // 而我们要清的旧索引副本是 cap_<ns>_idx_<时间戳>.json，会被过滤掉。
+    // 所以直接拉一次目录（服务端已优化到 2 秒左右），自己按 cap_<ns>_ 过滤。
+    const r = await fetch(NAS_ARCHIVE_HOST + '/api/archive/list?path=uploads', { headers: { Authorization: auth } });
+    if (!r.ok) throw new Error('列目录失败 HTTP ' + r.status);
+    const all = await r.json();
+    const mine = (Array.isArray(all) ? all : [])
+      .filter((x) => !x.is_dir && String(x.name || '').startsWith('cap_' + capCode + '_'));
+
+    const idx = (await capReadIndex(auth)) || [];
+    const dead = new Set(idx.filter((x) => x.del).map((x) => x.id));
+    const oldIdxRe = new RegExp('^cap_' + capCode + '_idx_\\d{8}_\\d{6}\\.json$');
+
+    const targets = [];
+    for (const it of mine) {
+      const n = it.name;
+      if (oldIdxRe.test(n)) targets.push({ name: n, why: '旧索引副本' });
+      else if (dead.has(n)) targets.push({ name: n, why: '已删除胶囊的孤儿' });
+    }
+    if (!targets.length) { flash('没有需要清理的文件（共 ' + mine.length + ' 个本命名空间文件）'); return; }
+
+    flash('清理中（' + targets.length + ' 个）…');
+    let ok = 0, fail = 0;
+    for (const t of targets) {
+      const res = await nasDeleteFile(t.name, auth);
+      if (res.ok) ok++; else fail++;
+    }
+    capListCache.at = 0;
+    flash('清理完成：删除 ' + ok + ' 个' + (fail ? '，失败 ' + fail + ' 个' : ''));
+  } catch (e) {
+    flash('清理失败：' + (e && e.message ? e.message : e));
+  }
+}
+
 // 删除一条胶囊：先删 NAS 上的文件（2026-11-09 起 knowly 支持了），再写墓碑让其他设备也移除。
 // 两步都做：真删保证 NAS 干净；墓碑保证别的设备时间线不会因为本地缓存还留着这条。
 // 真删失败（旧版 knowly / 网络问题）不算致命——退回纯墓碑，功能不受影响。
@@ -1341,20 +1405,10 @@ async function capDelete(it) {
   if (!auth) return;
   flash('删除中…');
 
-  let purged = false;
-  try {
-    const r = await fetch(NAS_DELETE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: auth },
-      body: JSON.stringify({ path: 'uploads/' + it.name }),
-    });
-    purged = r.ok;
-    if (!r.ok && r.status !== 404) {
-      const j = await r.json().catch(() => ({}));
-      console.warn('[cap] 真删失败，退回墓碑：', r.status, j.error || '');
-    }
-  } catch (e) {
-    console.warn('[cap] 真删请求异常，退回墓碑：', e.message);
+  const del = await nasDeleteFile(it.name, auth);
+  const purged = del.ok;
+  if (!del.ok && del.status !== 404) {
+    console.warn('[cap] 真删失败，退回墓碑：', del.status, del.error);
   }
 
   try {
@@ -1448,6 +1502,8 @@ function capBind() {
   m.addEventListener('click', (e) => { if (e.target === m) close(); });
   document.getElementById('capCollect').addEventListener('click', capCollect);
   document.getElementById('capSync').addEventListener('click', () => capSync(false));
+  const gcBtn = document.getElementById('capGc');
+  if (gcBtn) gcBtn.addEventListener('click', capGc);
   const deepBtn = document.getElementById('capDeep');
   if (deepBtn) deepBtn.addEventListener('click', () => {
     if (!confirm('深度同步会扫描 NAS 上传目录（两万多个文件，较慢，且会给 Knowly 造成压力）。\n\n只在换新设备或索引丢失时用，平时点「同步」即可。继续？')) return;
