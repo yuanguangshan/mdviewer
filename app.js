@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.37';
+const APP_VERSION = '4.39';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -871,12 +871,13 @@ async function renderMathFormulas() {
  *      行间 $$ 块也不会被 breaks:true 塞进 <br> 而失效。
  * 兜底：KaTeX 加载失败时把占位符还原成 $…$ 源码，内容不会丢。
  */
-async function fillMathPlaceholders(pm) {
+async function fillMathPlaceholders(pm, root) {
   if (!pm || !pm.blocks || !pm.blocks.length) return;
+  const scope = root || preview;      // 允许在别处（如 AI 解读面板）回填公式
   const ok = await ensureKatex();
   const re = new RegExp(pm.tokenBase + '(\\d+)x', 'g');
   const nodes = [];
-  const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT, null, false);
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null, false);
   let n;
   while ((n = walker.nextNode())) {
     if (n.nodeValue && n.nodeValue.indexOf(pm.tokenBase) >= 0) nodes.push(n);
@@ -1009,6 +1010,37 @@ function renderMarkdown(opts) {
   lastSanitizedHtml = snapshotPreviewHtml();   // 快照（保留 libimg:// 引用，供导出时内联为 data URL）
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
+}
+
+// 把一段 markdown 渲染进任意容器（AI 解读面板用）。
+// 复用主预览同一条管线：protectMath → marked → DOMPurify(LOCAL_SANITIZE) → hljs → KaTeX 回填。
+// 为什么不能直接调 renderMarkdown()：那个函数读的是 editor.value，还会顺手重建目录、
+// 改全局 lastRenderedSrc、触发 mermaid 与图片嵌入——副作用太多，放面板里会打架。
+function renderMdInto(container, md) {
+  if (!container) return;
+  const text = String(md || '');
+  let html;
+  try {
+    const pm = protectMath(text);
+    html = window.marked
+      ? marked.parse(pm.text, { breaks: true, gfm: true })
+      : '<pre>' + escapeHtml(text) + '</pre>';
+    html = html.replace(/src=(["'])libimg:\/\/([a-z0-9]+)\1/gi,
+      (m, q, id) => 'src=' + q + IMG_PLACEHOLDER + q + ' data-libimg=' + q + id + q);
+    container.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html, LOCAL_SANITIZE) : html;
+    // 标记「已渲染」：CSS 靠它把 white-space 从 pre-wrap 切回 normal。
+    // 不切的话，marked 输出里的换行在 pre-wrap 下会变成空行，列表项之间出现大段空白。
+    container.classList.add('md-rendered');
+    if (window.hljs) {
+      container.querySelectorAll('pre code').forEach((el) => {
+        try { hljs.highlightElement(el); } catch (_) {}
+      });
+    }
+    // 公式回填是异步的（要懒加载 katex），失败也不影响正文
+    Promise.resolve().then(() => fillMathPlaceholders(pm, container)).catch(() => {});
+  } catch (e) {
+    container.textContent = text;
+  }
 }
 
 // === SECTION: 预览区划词 AI 解读 ===
@@ -1151,13 +1183,23 @@ async function readAiAsk(question, contextOverride) {
   input.disabled = true;
   readAiAbort = new AbortController();
   let acc = '';
+  let lastPaint = 0;
+  // 流式期间每 300ms 用 markdown 渲染一次（纯文本会露出 ** 和 ``` 这些原始标记）。
+  // 不逐 token 渲染：一段回答几百 token，每帧重排整块 HTML 会明显掉帧。
+  const paint = (force) => {
+    const now = Date.now();
+    if (!force && now - lastPaint < 300) return;
+    lastPaint = now;
+    renderMdInto(aEl, acc);
+    body.scrollTop = body.scrollHeight;
+  };
   try {
     const r = await streamAiApi(prompt, sys, (delta) => {
       acc += delta;
-      aEl.textContent = acc;
-      body.scrollTop = body.scrollHeight;
+      paint(false);
     }, { signal: readAiAbort.signal, quiet: true, idleTimeout: 45000 });
-    if (r && !acc) { acc = r; aEl.textContent = acc; }
+    if (r && !acc) acc = r;
+    paint(true);                       // 收尾：确保完整渲染（含最后半句）
     if (acc) {
       readAiMessages.push({ role: 'user', content: q || '请解读这段文字' });
       readAiMessages.push({ role: 'assistant', content: acc });

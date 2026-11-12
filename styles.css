@@ -1859,3 +1859,23 @@ select:focus-visible,
 @media (max-width: 760px) {
   .read-ai-panel { right: 8px; left: 8px; bottom: 8px; width: auto; max-height: 66vh; }
 }
+
+/* AI 解读面板里的 markdown：整体缩小一号，避免抢主体预览的视觉层级 */
+.read-ai-panel .markdown-body { font-size: 13.5px; line-height: 1.65; }
+.read-ai-panel .markdown-body > :first-child { margin-top: 0; }
+.read-ai-panel .markdown-body > :last-child { margin-bottom: 0; }
+.read-ai-panel .markdown-body h1,
+.read-ai-panel .markdown-body h2,
+.read-ai-panel .markdown-body h3 { font-size: 14.5px; margin: 10px 0 4px; }
+.read-ai-panel .markdown-body pre { padding: 8px 10px; font-size: 12px; }
+.read-ai-panel .markdown-body table { font-size: 12.5px; }
+.read-ai-panel .markdown-body p { margin: 6px 0; }
+
+/* 流式阶段是纯文本（要保留换行），渲染成 markdown 后必须切回 normal，
+   否则 marked 输出里的换行会被 pre-wrap 显示成空行，列表/表格之间撑开大缝 */
+.rap-a { white-space: pre-wrap; }
+.rap-a.md-rendered { white-space: normal; }
+.read-ai-panel .markdown-body ul,
+.read-ai-panel .markdown-body ol { margin: 4px 0; padding-left: 1.3em; }
+.read-ai-panel .markdown-body li { margin: 2px 0; }
+.read-ai-panel .markdown-body blockquote { margin: 6px 0; padding-left: 10px; }
