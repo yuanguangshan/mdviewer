@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.36';
+const APP_VERSION = '4.37';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1010,6 +1010,196 @@ function renderMarkdown(opts) {
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
 }
+
+// === SECTION: 预览区划词 AI 解读 ===
+// 场景：看书/读长文时，选中一段话就能直接问模型「这句什么意思」「帮我解释这个术语」，
+// 不用切到编辑器、不用复制粘贴。
+//
+// 设计取舍：
+//   · 只在预览区（#preview）里生效——编辑区选中是要编辑，弹按钮会碍事；
+//   · 用 selectionchange + debounce，而不是只用 mouseup：手机上长按选中只发 selectionchange；
+//   · 面板里保留原文摘录 + 多轮追问（messages 数组自己拼），比一次性回答有用；
+//   · 全程复用 streamAiApi，所以模型/Key/超时保护都跟现有 AI 功能一致。
+const READ_AI_MAX_CHARS = 3000;   // 选中超长时截断，避免把整章塞进去烧 token
+let readAiSelection = '';
+let readAiMessages = [];          // [{role:'user'|'assistant', content}]
+let readAiStreaming = false;
+let readAiAbort = null;
+let readAiTimer = 0;
+
+function readAiInit() {
+  const btn = document.getElementById('readAiBtn');
+  const panel = document.getElementById('readAiPanel');
+  if (!btn || !panel) return;
+
+  // 选区变化：决定是否显示浮动按钮
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(readAiTimer);
+    readAiTimer = setTimeout(readAiOnSelectionChange, 180);
+  });
+  // 点空白/滚动时收起按钮（面板不受影响）
+  document.addEventListener('mousedown', (e) => {
+    if (e.target === btn || panel.contains(e.target)) return;
+    if (!panel.hidden) return;      // 面板开着时不收按钮逻辑
+    btn.hidden = true;
+  }, true);
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const text = readAiSelection;
+    btn.hidden = true;
+    if (!text) return;
+    readAiOpen(text);
+  });
+
+  document.getElementById('rapClose').addEventListener('click', readAiClose);
+  document.getElementById('rapCopy').addEventListener('click', () => {
+    const body = document.getElementById('rapBody');
+    const txt = body.innerText.trim();
+    if (!txt) { flash('还没有回答'); return; }
+    (navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(txt).catch(() => fallbackCopy(txt))
+      : (fallbackCopy(txt), Promise.resolve())
+    ).then(() => flash('已复制回答'), () => flash('复制失败'));
+  });
+  document.getElementById('rapInsert').addEventListener('click', readAiInsertToDoc);
+  document.getElementById('rapSend').addEventListener('click', () => readAiAsk(document.getElementById('rapInput').value));
+  document.getElementById('rapInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); readAiAsk(e.target.value); }
+  });
+}
+
+function readAiOnSelectionChange() {
+  const btn = document.getElementById('readAiBtn');
+  if (!btn) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) { btn.hidden = true; return; }
+  // 必须在预览区内
+  const preview = document.getElementById('preview');
+  if (!preview) { btn.hidden = true; return; }
+  const anchor = sel.anchorNode;
+  if (!anchor || !preview.contains(anchor.nodeType === 1 ? anchor : anchor.parentNode)) {
+    btn.hidden = true;
+    return;
+  }
+  const text = String(sel.toString() || '').trim();
+  if (text.length < 2) { btn.hidden = true; return; }
+  readAiSelection = text.slice(0, READ_AI_MAX_CHARS);
+  // 按钮浮在选区右上方
+  try {
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    const w = 96, h = 32;
+    let x = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), window.innerWidth - w - 8);
+    let y = r.top - h - 8;
+    if (y < 8) y = Math.min(window.innerHeight - h - 8, r.bottom + 8);   // 顶部放不下就放下面
+    btn.style.left = Math.round(x) + 'px';
+    btn.style.top = Math.round(y) + 'px';
+  } catch (_) { /* 拿不到 rect 就让它用默认位置 */ }
+  btn.hidden = false;
+}
+
+function readAiOpen(text) {
+  const panel = document.getElementById('readAiPanel');
+  readAiMessages = [];
+  readAiStreaming = false;
+  document.getElementById('rapQuote').textContent = text.length > 240 ? text.slice(0, 240) + '…' : text;
+  document.getElementById('rapBody').innerHTML = '';
+  document.getElementById('rapInput').value = '';
+  const badge = document.getElementById('rapModel');
+  if (badge) {
+    const cfg = readAiConfig();
+    badge.textContent = cfg.model || 'free';
+  }
+  panel.hidden = false;
+  // 首问：让模型直接解读
+  readAiAsk('', text);
+}
+
+async function readAiAsk(question, contextOverride) {
+  if (readAiStreaming) { flash('正在回答，稍等…'); return; }
+  const context = contextOverride || readAiSelection;
+  const q = String(question || '').trim();
+  const body = document.getElementById('rapBody');
+  const input = document.getElementById('rapInput');
+
+  // 把用户问题写进面板（首问显示"解读这段"）
+  const qEl = document.createElement('div');
+  qEl.className = 'rap-q';
+  qEl.textContent = q ? '我：' + q : '我：解读这段文字';
+  body.appendChild(qEl);
+
+  const aEl = document.createElement('div');
+  aEl.className = 'rap-a';
+  body.appendChild(aEl);
+
+  // 组装 messages：system 定角色，user 里带原文 + 历史问答 + 本次问题
+  const sys = '你是一位博学、简洁的阅读助手。用户会给你一段原文并提问。' +
+    '请用中文回答：先一句话点明核心意思，再分点补充必要的背景/术语/例子；' +
+    '不确定的地方直接说不确定，不要编造。总长度控制在 300 字以内，除非用户要求展开。';
+  let prompt = '【原文】\n' + context + '\n\n';
+  if (readAiMessages.length) {
+    prompt += '【之前的对话】\n';
+    for (const m of readAiMessages) {
+      prompt += (m.role === 'user' ? '问：' : '答：') + m.content + '\n';
+    }
+    prompt += '\n';
+  }
+  prompt += q ? ('【本次问题】' + q) : '【本次任务】请解读这段文字：它在说什么？有没有隐含前提或术语需要解释？';
+
+  readAiStreaming = true;
+  input.disabled = true;
+  readAiAbort = new AbortController();
+  let acc = '';
+  try {
+    const r = await streamAiApi(prompt, sys, (delta) => {
+      acc += delta;
+      aEl.textContent = acc;
+      body.scrollTop = body.scrollHeight;
+    }, { signal: readAiAbort.signal, quiet: true, idleTimeout: 45000 });
+    if (r && !acc) { acc = r; aEl.textContent = acc; }
+    if (acc) {
+      readAiMessages.push({ role: 'user', content: q || '请解读这段文字' });
+      readAiMessages.push({ role: 'assistant', content: acc });
+    } else {
+      aEl.textContent = '（没有拿到回答，检查 AI 配置或稍后再试）';
+    }
+  } catch (e) {
+    aEl.textContent = '出错了：' + (e && e.message ? e.message : e);
+  } finally {
+    readAiStreaming = false;
+    readAiAbort = null;
+    input.disabled = false;
+    input.value = '';
+    input.focus();
+    body.scrollTop = body.scrollHeight;
+  }
+}
+
+function readAiClose() {
+  if (readAiAbort) { try { readAiAbort.abort(); } catch (_) {} }
+  const panel = document.getElementById('readAiPanel');
+  if (panel) panel.hidden = true;
+  readAiStreaming = false;
+  readAiMessages = [];
+}
+
+// 把「原文摘录 + 问答」追加到文档末尾：读书笔记的常见需求
+function readAiInsertToDoc() {
+  const body = document.getElementById('rapBody');
+  const txt = body.innerText.trim();
+  if (!txt) { flash('还没有回答'); return; }
+  const quote = readAiSelection.length > 300 ? readAiSelection.slice(0, 300) + '…' : readAiSelection;
+  const block = '\n\n> ' + quote.replace(/\n/g, '\n> ') + '\n\n**AI 解读**\n\n' + txt + '\n';
+  const at = editor.value.length;
+  editor.value += block;
+  editor.selectionStart = editor.selectionEnd = at + block.length;
+  afterChange();
+  flash('已追加到文档末尾');
+  readAiClose();
+}
+
+readAiInit();
 
 // === SECTION: 配置导出 / 恢复（换设备免重配）===
 // 只导出「偏好设置」这一类，白名单写死：不认识的键一律不写回，

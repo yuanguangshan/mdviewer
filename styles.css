@@ -1812,3 +1812,50 @@ select:focus-visible,
 .cap-code-line b { color:var(--text); font-family:var(--mono); font-size:13.5px; letter-spacing:.5px; }
 .cap-mini { font-size:11.5px; padding:3px 8px; border-radius:6px; cursor:pointer;
   border:1px solid var(--border); background:var(--bg-elev); color:var(--text); }
+
+/* === 预览区划词 AI === */
+.read-ai-btn {
+  position: fixed; z-index: 70; padding: 6px 11px; border-radius: 8px;
+  border: 1px solid var(--accent-soft); background: var(--accent); color: #fff;
+  font-size: 13px; line-height: 1; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.28);
+  white-space: nowrap;
+}
+.read-ai-btn:active { transform: translateY(1px); }
+.read-ai-panel {
+  position: fixed; z-index: 71; right: 14px; bottom: 14px;
+  width: min(460px, calc(100vw - 28px)); max-height: 72vh;
+  display: flex; flex-direction: column;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 16px 44px rgba(0,0,0,.42); overflow: hidden;
+}
+.read-ai-panel[hidden] { display: none; }
+.rap-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.rap-title { font-size: 13.5px; font-weight: 600; }
+.rap-model { font: 11px/1 var(--mono); color: var(--text-dim); margin-left: auto; }
+.rap-x { border: 0; background: transparent; color: var(--text-dim); font-size: 14px; cursor: pointer; padding: 2px 4px; }
+.rap-quote {
+  margin: 10px 12px 0; padding: 8px 10px; border-left: 3px solid var(--accent-soft);
+  background: var(--bg-soft); border-radius: 0 8px 8px 0;
+  font-size: 12.5px; color: var(--text-dim); line-height: 1.55;
+  max-height: 5.5em; overflow: hidden; white-space: pre-wrap; word-break: break-word;
+}
+.rap-body {
+  flex: 1; min-height: 60px; overflow: auto; padding: 10px 12px;
+  font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+}
+.rap-body .rap-q { color: var(--text-dim); font-size: 12.5px; margin: 8px 0 2px; }
+.rap-body .rap-a { margin-bottom: 6px; }
+.rap-ask { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.rap-ask input {
+  flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--code-bg); color: var(--text); font-size: 13px;
+}
+.rap-ask button { padding: 7px 12px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
+.rap-foot { display: flex; gap: 8px; padding: 0 12px 10px; }
+.rap-foot button {
+  font-size: 12px; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
+}
+@media (max-width: 760px) {
+  .read-ai-panel { right: 8px; left: 8px; bottom: 8px; width: auto; max-height: 66vh; }
+}
