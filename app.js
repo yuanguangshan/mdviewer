@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.39';
+const APP_VERSION = '4.40';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1148,7 +1148,8 @@ function readAiOpen(text) {
   readAiAsk('', text);
 }
 
-async function readAiAsk(question, contextOverride) {
+async function readAiAsk(question, contextOverride, opts) {
+  opts = opts || {};
   if (readAiStreaming) { flash('正在回答，稍等…'); return; }
   const context = contextOverride || readAiSelection;
   const q = String(question || '').trim();
@@ -1177,7 +1178,12 @@ async function readAiAsk(question, contextOverride) {
     }
     prompt += '\n';
   }
-  prompt += q ? ('【本次问题】' + q) : '【本次任务】请解读这段文字：它在说什么？有没有隐含前提或术语需要解释？';
+  if (opts.continueFrom) {
+    prompt += '【你已经说过的部分（上次被长度上限截断）】\n' + opts.continueFrom +
+      '\n\n【本次任务】请**接着上面断掉的地方继续**，不要重复已说过的内容，直接往下写。';
+  } else {
+    prompt += q ? ('【本次问题】' + q) : '【本次任务】请解读这段文字：它在说什么？有没有隐含前提或术语需要解释？';
+  }
 
   readAiStreaming = true;
   input.disabled = true;
@@ -1203,6 +1209,7 @@ async function readAiAsk(question, contextOverride) {
     if (acc) {
       readAiMessages.push({ role: 'user', content: q || '请解读这段文字' });
       readAiMessages.push({ role: 'assistant', content: acc });
+      if (lastAiTruncated) readAiAddContinue(aEl, acc);
     } else {
       aEl.textContent = '（没有拿到回答，检查 AI 配置或稍后再试）';
     }
@@ -1216,6 +1223,26 @@ async function readAiAsk(question, contextOverride) {
     input.focus();
     body.scrollTop = body.scrollHeight;
   }
+}
+
+// 回答被 max_tokens 截断时，在回答下方给一个「继续生成」按钮。
+// 续写用「把已说过的内容作为上下文 + 明确要求接着写」的方式，模型不会从头重复。
+function readAiAddContinue(afterEl, fullSoFar) {
+  const old = afterEl.parentNode.querySelector('.rap-more');
+  if (old) old.remove();
+  const bar = document.createElement('div');
+  bar.className = 'rap-more';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '↩︎ 继续生成（上次被长度上限截断）';
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = '继续中…';
+    await readAiAsk('', readAiSelection, { continueFrom: fullSoFar });
+    bar.remove();
+  };
+  bar.appendChild(btn);
+  afterEl.parentNode.insertBefore(bar, afterEl.nextSibling);
 }
 
 function readAiClose() {
@@ -3631,8 +3658,11 @@ function askAiKeyViaModal() {
     }, 200);
   });
 }
+let lastAiTruncated = false;   // 上一次 AI 回答是否被 max_tokens 截断（供「继续生成」判断）
+
 async function streamAiApi(promptText, systemPrompt, onToken, opts) {
   opts = opts || {};
+  lastAiTruncated = false;
   let cfg = readAiConfig();
   let apiKey = cfg.apiKey;
   if (!apiKey) {
@@ -3679,6 +3709,9 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
           { role: 'user', content: promptText }
         ],
         temperature: 0.7,
+        // 以前没传 max_tokens，用服务端默认值（常见 512），长回答会被硬截断而且毫无提示。
+        // 2048 对「解读一段话」足够，对摘要/润色也够；个别端点若不认这个字段会直接忽略。
+        max_tokens: opts.maxTokens || 2048,
         stream: true
       })
     });
@@ -3696,7 +3729,7 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '', sseMode = null;
+    let buffer = '', sseMode = null, truncated = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -3713,6 +3746,9 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
           const line = buffer.slice(0, idx).trim();
           buffer = buffer.slice(idx + 1);
           if (!line.startsWith('data:')) continue;
+          // 截断检测：finish_reason=length 表示撞上 max_tokens 上限。
+          // 用字符串匹配而不是再 JSON.parse 一遍——每行都 parse 会明显拖慢流式。
+          if (line.indexOf('finish_reason') >= 0 && line.indexOf('"length"') >= 0) truncated = true;
           const delta = parseSseLine(line);      // 与 md-core 单测同一份解析逻辑
           if (delta) { full += delta; if (onToken) onToken(delta, full); }
         }
@@ -3724,6 +3760,10 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
       if (onToken) onToken(full, full);
     }
     cleanupTimers();
+    lastAiTruncated = truncated;
+    if (truncated && !opts.silentTruncated) {
+      toast('⚠️ 回答撞到长度上限被截断（max_tokens=' + (opts.maxTokens || 2048) + '），可以点「继续生成」', 'warn', 6000);
+    }
     return full.trim();
   } catch (e) {
     cleanupTimers();

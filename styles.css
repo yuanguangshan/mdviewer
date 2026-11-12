@@ -1879,3 +1879,12 @@ select:focus-visible,
 .read-ai-panel .markdown-body ol { margin: 4px 0; padding-left: 1.3em; }
 .read-ai-panel .markdown-body li { margin: 2px 0; }
 .read-ai-panel .markdown-body blockquote { margin: 6px 0; padding-left: 10px; }
+
+/* AI 回答被截断时的「继续生成」条 */
+.rap-more { padding: 4px 12px 8px; }
+.rap-more button {
+  width: 100%; padding: 7px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px dashed var(--warn, #d19a66); background: rgba(209,154,102,.12);
+  color: var(--text); font-size: 12.5px;
+}
+.rap-more button[disabled] { opacity: .6; cursor: default; }
