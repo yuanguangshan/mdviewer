@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.35';
+const APP_VERSION = '4.36';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1009,6 +1009,146 @@ function renderMarkdown(opts) {
   lastSanitizedHtml = snapshotPreviewHtml();   // 快照（保留 libimg:// 引用，供导出时内联为 data URL）
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
+}
+
+// === SECTION: 配置导出 / 恢复（换设备免重配）===
+// 只导出「偏好设置」这一类，白名单写死：不认识的键一律不写回，
+// 免得一份被改过的配置文件把设备标识、草稿、缓存塞进 localStorage。
+//
+// 三类东西故意不导出：
+//   ① 凭据：nas-auth（Basic）、knowly-token（Bearer）—— 明文进 NAS 等于把钥匙挂门上；
+//   ② 数据：md-draft / 文库 / 背景图 blob —— 有自己的备份通道（zip / 文库同步）；
+//   ③ 设备相关：cap_dev（设备 id）、nas-sync-state（同步游标）、knowly-path-cache（缓存）。
+// md-ai-config 含 apiKey，默认不含，导出时单独询问。
+const CFG_WHITELIST = [
+  'md-theme',            // 深/浅/跟随系统
+  'md-mdtheme',          // 预览主题（github / onedark / …）
+  'md-text-style',       // 正文字号 + 颜色
+  'md-wrap',             // 软换行
+  'md-vim-mode',         // Vim 模式
+  'md-toc',              // 目录抽屉默认开/关
+  'md-layout-swapped',   // 左右布局是否交换
+  'md-editor-width',     // 编辑器宽度
+  'md-lib-sub',          // 文库副标题
+  'md-quick-menu',       // 左上角快捷菜单自定义项
+  'md-act-freq',         // 常用功能频次（菜单顶部那五项）
+  'md-format-brush',     // 格式刷配置
+  'md-ai-model-history', // 用过的模型（endpoint + model，不含 key）
+  'app-bg-settings',     // 背景遮罩 / 填充方式 / 图片链接
+];
+const CFG_SENSITIVE = ['md-ai-config'];   // 含 apiKey，需显式确认
+const CFG_PREFIX = 'mdviewer-config-';
+const CFG_VERSION = 1;
+
+function cfgCollect(includeSensitive) {
+  const data = {};
+  for (const k of CFG_WHITELIST) {
+    const v = localStorage.getItem(k);
+    if (v != null) data[k] = v;
+  }
+  if (includeSensitive) {
+    for (const k of CFG_SENSITIVE) {
+      const v = localStorage.getItem(k);
+      if (v != null) data[k] = v;
+    }
+  }
+  return data;
+}
+
+function cfgStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+
+async function exportConfig() {
+  const auth = await ensureNasAuth('配置备份');
+  if (!auth) return;
+  let authHeader = '';
+  try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return; }
+
+  // AI 配置里有 apiKey：默认不含，明确问一次
+  const includeAi = await askConfirm('是否包含 AI 配置？',
+    'AI 配置里存着接口地址、模型名和 **API Key**。\n\n' +
+    '点「确定」：一起写入配置文件（方便换设备，但 Key 会以明文存在你自己的 NAS 上）\n' +
+    '点「取消」：不含 AI 配置（推荐，Key 到新设备上单独填一次）');
+  const data = cfgCollect(includeAi);
+  const payload = {
+    app: 'mdviewer',
+    version: CFG_VERSION,
+    exportedAt: new Date().toISOString(),
+    device: navigator.userAgent.includes('iPhone') ? 'iPhone'
+      : navigator.userAgent.includes('iPad') ? 'iPad'
+      : navigator.userAgent.includes('Mac') ? 'Mac' : 'unknown',
+    includesAiConfig: includeAi,
+    keys: Object.keys(data).length,
+    data: data,
+  };
+  const name = CFG_PREFIX + cfgStamp() + '.json';
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  flash('正在上传配置…');
+  try {
+    const fd = new FormData();
+    fd.append('file', blob, name);
+    const r = await fetch(NAS_UPLOAD_URL, { method: 'POST', headers: { Authorization: authHeader }, body: fd });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    flash('配置已导出：' + name + '（' + payload.keys + ' 项' + (includeAi ? '，含 AI' : '') + '）');
+  } catch (e) {
+    flash('导出失败：' + e.message);
+  }
+}
+
+// 从 NAS 找最新的配置文件（按文件名里的时间戳排序，不依赖 mod_time 时区）
+async function findLatestConfig(authHeader) {
+  const r = await fetch(NAS_ARCHIVE_HOST + '/api/archive/list?path=uploads', { headers: { Authorization: authHeader } });
+  if (!r.ok) throw new Error('列目录失败 HTTP ' + r.status);
+  const all = await r.json();
+  const list = (Array.isArray(all) ? all : [])
+    .filter((x) => !x.is_dir && String(x.name || '').startsWith(CFG_PREFIX))
+    .map((x) => x.name)
+    .sort()
+    .reverse();
+  return list;
+}
+
+async function importConfig() {
+  const auth = await ensureNasAuth('配置恢复');
+  if (!auth) return;
+  let authHeader = '';
+  try { authHeader = 'Basic ' + btoa(auth); } catch (_) { flash('凭据含非法字符，已取消'); return; }
+
+  flash('正在查找配置文件…');
+  let list = [];
+  try { list = await findLatestConfig(authHeader); } catch (e) { flash('查找失败：' + e.message); return; }
+  if (!list.length) { flash('NAS 上还没有配置文件（先在旧设备点「导出配置到 NAS」）'); return; }
+
+  const name = list[0];
+  const ok = await askConfirm('恢复配置？',
+    '找到最新一份：' + name + '\n\n' +
+    '共 ' + list.length + ' 份历史配置。恢复会**覆盖本机当前的偏好设置**（主题、字号、布局、快捷菜单等）。\n' +
+    '不会动：文库文档、草稿、NAS 凭据、AI Key（除非那份配置里含）。');
+  if (!ok) return;
+
+  flash('正在下载配置…');
+  let payload = null;
+  try {
+    const r = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name),
+      { headers: { Authorization: authHeader }, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    payload = await r.json();
+  } catch (e) { flash('下载失败：' + e.message); return; }
+
+  if (!payload || payload.app !== 'mdviewer' || !payload.data) { flash('文件格式不对，已中止'); return; }
+
+  // 只写回白名单里的键（+ 用户明确包含过的敏感键）
+  const allowed = new Set(CFG_WHITELIST.concat(payload.includesAiConfig ? CFG_SENSITIVE : []));
+  let n = 0, skipped = 0;
+  for (const [k, v] of Object.entries(payload.data)) {
+    if (!allowed.has(k)) { skipped++; continue; }
+    try { localStorage.setItem(k, v); n++; } catch (_) {}
+  }
+  flash('已恢复 ' + n + ' 项设置' + (skipped ? '（跳过 ' + skipped + ' 项非白名单）' : '') + '，正在刷新…');
+  setTimeout(() => location.reload(), 1200);
 }
 
 // === SECTION: 时光胶囊（剪贴板同步，明文存 NAS）===
@@ -5306,6 +5446,8 @@ function handleDataAct(act, btn) {
   else if (act === 'layout-reset') resetLayout();
   else if (act === 'bg') openBgDialog();
   else if (act === 'capsule') capOpen();
+  else if (act === 'cfg-export') exportConfig();
+  else if (act === 'cfg-import') importConfig();
   else if (act === 'fb-customize') openFbCustomize();
   else if (act === 'backup-export') exportBackup();
   else if (act === 'backup-import') importBackup();
