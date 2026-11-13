@@ -82,6 +82,9 @@ let remoteLoading = false;
 // - 若需切换分享后端，仅需改这一行 + 同步上面三项，前端其余逻辑不用动。
 // ============================================================
 const R2_WORKER_URL = 'https://share.want.biz';
+// 内容发布令牌的存储键（必须定义在顶部：文件末尾的初始化代码会读它，
+// 定义在 5700 行附近会撞 TDZ —— 这个项目以前就踩过同样的坑）
+const PUBLISH_TOKEN_KEY = 'publish-token';
 
 // === SECTION: 小工具 ===
 function debounce(fn, ms) {
@@ -136,7 +139,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.41';
+const APP_VERSION = '4.43';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1270,6 +1273,7 @@ function readAiInsertToDoc() {
 
 readAiInit();
 setGuardOutbound(guardOutboundOn());   // 让菜单项文案与本地设置一致
+capturePublishTokenFromUrl();            // 允许用 ?pubtok= 一次性写入发布令牌
 
 // === SECTION: 配置导出 / 恢复（换设备免重配）===
 // 只导出「偏好设置」这一类，白名单写死：不认识的键一律不写回，
@@ -5748,6 +5752,27 @@ function defaultBlogTags() {
 
 // blogSmartCut / parseBlogMeta / blogMdToPlain 已下沉到 lib/md-core.js（含单测）。
 
+// === 内容发布令牌（2026-11-13）===
+// 服务端 /api/publish、/api/ima/import 现在要求 Authorization: Bearer <token>。
+// token 存在本机 localStorage，不进代码（仓库是公开的）。
+// 首次配置最省事的方式：打开 https://md.want.biz/?pubtok=<token> 一次，
+// 下面会自动存进 localStorage 并把 URL 里的参数抹掉（不留历史记录）。
+function publishToken() {
+  try { return localStorage.getItem(PUBLISH_TOKEN_KEY) || ''; } catch (_) { return ''; }
+}
+
+function capturePublishTokenFromUrl() {
+  try {
+    const u = new URL(location.href);
+    const tok = u.searchParams.get('pubtok');
+    if (!tok) return;
+    localStorage.setItem(PUBLISH_TOKEN_KEY, tok.trim());
+    u.searchParams.delete('pubtok');
+    history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
+    setTimeout(() => flash('发布令牌已保存（之后发布/存 IMA 无需再配）'), 600);
+  } catch (_) {}
+}
+
 async function blogPostJSON(url, json, extraHeaders, timeoutMs) {
   const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
   const t = timeoutMs || 20000;
@@ -5755,7 +5780,11 @@ async function blogPostJSON(url, json, extraHeaders, timeoutMs) {
   try {
     const resp = await fetch(url, {
       method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {}),
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        publishToken() ? { Authorization: 'Bearer ' + publishToken() } : {},
+        extraHeaders || {}
+      ),
       body: JSON.stringify(json),
       signal: ctrl ? ctrl.signal : undefined
     });
@@ -5763,6 +5792,9 @@ async function blogPostJSON(url, json, extraHeaders, timeoutMs) {
     try { data = await resp.json(); } catch (_) {}
     if (!resp.ok) {
       const msg = (data && (data.message || data.error)) ? (data.message || data.error) : JSON.stringify(data);
+      if (resp.status === 401) {
+        throw new Error('发布令牌无效或未配置。用 ?pubtok=<令牌> 打开一次本页即可写入（服务端配置项 PUBLISH_API_KEY）');
+      }
       throw new Error('HTTP ' + resp.status + '：' + msg);
     }
     return data;
