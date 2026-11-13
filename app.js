@@ -136,7 +136,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.40';
+const APP_VERSION = '4.41';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1269,6 +1269,7 @@ function readAiInsertToDoc() {
 }
 
 readAiInit();
+setGuardOutbound(guardOutboundOn());   // 让菜单项文案与本地设置一致
 
 // === SECTION: 配置导出 / 恢复（换设备免重配）===
 // 只导出「偏好设置」这一类，白名单写死：不认识的键一律不写回，
@@ -5716,6 +5717,11 @@ function handleDataAct(act, btn) {
   else if (act === 'share-r2') shareViaR2();
   else if (act === 'layout-swap') toggleLayoutSwap();
   else if (act === 'layout-reset') resetLayout();
+  else if (act === 'guard-out') {
+    const on = !guardOutboundOn();
+    setGuardOutbound(on);
+    toast(on ? '外发确认：开（发布/分享前弹确认）' : '外发确认：关（直接执行）');
+  }
   else if (act === 'bg') openBgDialog();
   else if (act === 'capsule') capOpen();
   else if (act === 'cfg-export') exportConfig();
@@ -5777,10 +5783,58 @@ function showBlogResult(url) {
   toast('✅ 博客发布成功', 'ok');
 }
 
+// === SECTION: 敏感操作守卫 ===
+// 目的：把「内容会离开本机」和「会改动远端」的动作统一挡一道，并留下审计痕迹。
+// 为什么需要：这些动作以前只判断了"外部只读模式"，本机正常文档点一下就直接发出去了，
+// 手机误触、或者别人拿到你手机，都能一发不可收（发布到公网 / 删 NAS 文件）。
+//
+// 分级：
+//   · outbound（内容外发）：博客、IMA、播客、分享链接 —— 弹确认，显示目标 + 内容开头；
+//   · destructive（破坏性）：删 NAS 文件 —— 弹确认（调用方另有更细的确认时用它兜底）；
+//   · 审计：全部记到 localStorage['md-audit']，最近 60 条，诊断面板可查。
+const AUDIT_KEY = 'md-audit';
+const AUDIT_MAX = 60;
+
+function auditLog(action, detail, ok) {
+  try {
+    const list = JSON.parse(localStorage.getItem(AUDIT_KEY) || '[]');
+    list.unshift({ at: Date.now(), action, detail: String(detail || '').slice(0, 120), ok: ok !== false });
+    localStorage.setItem(AUDIT_KEY, JSON.stringify(list.slice(0, AUDIT_MAX)));
+  } catch (_) {}
+}
+
+// 外发前确认：把「发到哪」和「发什么」摆在一起，避免发错文档/发错渠道
+// 外发确认开关：默认开（防误发），嫌烦可在「开关设置」里关掉。
+// 这不是"防别人"——设备是你自己的；它挡的是"草稿写一半点错""发错文档"这类误操作。
+const GUARD_OUTBOUND_KEY = 'md-guard-outbound';
+function guardOutboundOn() {
+  try { return localStorage.getItem(GUARD_OUTBOUND_KEY) !== '0'; } catch (_) { return true; }
+}
+function setGuardOutbound(on) {
+  try { localStorage.setItem(GUARD_OUTBOUND_KEY, on ? '1' : '0'); } catch (_) {}
+  const btn = document.getElementById('menuGuardOut');
+  if (btn) btn.textContent = '🛡 外发确认：' + (on ? '开' : '关');
+}
+
+async function guardOutbound(label, target, content) {
+  if (!guardOutboundOn()) return true;      // 关了就直接发
+
+  const head = String(content || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const ok = await askConfirm('确认' + label + '？',
+    '目标：' + target + '\n\n' +
+    '内容开头：\n' + head + (head.length >= 120 ? '…' : '') + '\n\n' +
+    '点「确定」执行；点「取消」什么也不做。');
+  if (!ok) { auditLog(label, target + '（已取消）', false); flash('已取消'); }
+  return ok;
+}
+
 async function publishToBlog() {
   if (blockInRemoteMode('发布到博客')) return;
   const md = (editor.value || '').trim();
   if (!md) { flash('没有内容：请先写点东西再发布'); return; }
+  // 发布 = 内容上公网，必须先确认（以前这里直接发）
+  if (!(await guardOutbound('发布到博客', '公网博客（blog.want.biz）', md))) return;
+  auditLog('发布到博客', '已确认', true);
   flash('正在发布到博客…');
   try {
     const { title, tags, body } = parseBlogMeta(md);
@@ -5832,6 +5886,8 @@ async function saveToIma() {
   if (blockInRemoteMode('保存到 IMA')) return;
   const md = (editor.value || '').trim();
   if (!md) { flash('没有内容：请先写点东西再保存'); return; }
+  if (!(await guardOutbound('存到 IMA', 'IMA 笔记（腾讯）', md))) return;
+  auditLog('存到 IMA', '已确认', true);
   const { title, tags, body } = parseBlogMeta(md);
   flash('正在保存到 IMA 笔记…');
   try {
@@ -5883,6 +5939,8 @@ async function publishToPodcast() {
   }
   if (!text) text = (editor.value || '').trim();
   if (!text) { flash('没有可转播的内容'); return; }
+  if (!(await guardOutbound('转成播客', '朗读服务（会生成音频并上传 NAS）', text))) return;
+  auditLog('转成播客', '已确认', true);
 
   // 2. 自动提取第一行作为标题：[Read] <首行>
   const firstLine = text.split('\n')[0].replace(/[#*>-]/g, '').trim();
@@ -7051,6 +7109,9 @@ async function shareViaR2() {
   if (blockInRemoteMode('生成分享链接')) return;
   if (!R2_WORKER_URL) { flash('未配置分享服务地址'); return; }
   if (!editor.value.trim()) { flash('文档为空，无法分享'); return; }
+  if (!(await guardOutbound(currentShareId ? '更新分享链接' : '生成分享链接',
+    '公网可读的分享链接（任何拿到链接的人都能打开）', editor.value))) return;
+  auditLog(currentShareId ? '更新分享链接' : '生成分享链接', '公网可读', true);
   toast(currentShareId ? '正在更新协作文档…' : '正在生成协作链接…', 'info');
   const url = currentShareId ? `${R2_WORKER_URL}/${encodeURIComponent(currentShareId)}` : R2_WORKER_URL;
   const method = currentShareId ? 'PUT' : 'POST';
@@ -7889,6 +7950,18 @@ function diagnosticsText() {
     '- 文档：' + (currentName || '') + '（' + countWords(editor.value).words + ' 字）' + (currentLibId ? ' · 文库' : ''),
     '- 文库：' + (libDocsCache ? libDocsCache.length + ' 篇' : '未加载') + ' · localStorage 占用 ' + storage,
     '- 库版本：md-core ' + (Core ? '已加载' : '缺失') + ' · SW ' + (navigator.serviceWorker && navigator.serviceWorker.controller ? '已接管' : '未接管'),
+    '- 敏感操作（最近 8 条）：' + (function () {
+      try {
+        const list = JSON.parse(localStorage.getItem(AUDIT_KEY) || '[]').slice(0, 8);
+        if (!list.length) return '无';
+        return '\n' + list.map(function (x) {
+          const d = new Date(x.at);
+          const t = (d.getMonth() + 1) + '-' + d.getDate() + ' ' +
+            String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+          return '  ' + t + ' ' + (x.ok ? '✓' : '✗') + ' ' + x.action + (x.detail ? '（' + x.detail + '）' : '');
+        }).join('\n');
+      } catch (_) { return '无'; }
+    })(),
     '- UA：' + ua,
     '',
     '## 最近错误（' + errLog.length + ' 条）',
