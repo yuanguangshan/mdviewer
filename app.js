@@ -139,7 +139,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.46';
+const APP_VERSION = '4.47';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1274,6 +1274,7 @@ function readAiInsertToDoc() {
 readAiInit();
 setGuardOutbound(guardOutboundOn());   // 让菜单项文案与本地设置一致
 capturePublishTokenFromUrl();            // 允许用 ?pubtok= 一次性写入发布令牌
+try { updatePublishKeyHint(); } catch (_) {}   // 菜单里显示「已配置 / 未配」
 
 // === SECTION: 配置导出 / 恢复（换设备免重配）===
 // 只导出「偏好设置」这一类，白名单写死：不认识的键一律不写回，
@@ -5745,6 +5746,7 @@ function handleDataAct(act, btn) {
   else if (act === 'fb-customize') openFbCustomize();
   else if (act === 'backup-export') exportBackup();
   else if (act === 'backup-import') importBackup();
+  else if (act === 'publish-key') editPublishToken();
   else if (act === 'diagnostics') showDiagnostics();
   else if (act === 'commandPalette') openPalette();
   else if (act === 'hardReset') hardResetApp(true);
@@ -5783,6 +5785,35 @@ function capturePublishTokenFromUrl() {
     history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
     setTimeout(() => flash('发布令牌已保存（之后发布/存 IMA 无需再配）'), 600);
   } catch (_) {}
+}
+
+// 菜单里「发布令牌」那一行要显示当前是否已配置。
+// 为什么不只靠 ?pubtok=：装成 PWA 之后启动地址固定在 manifest 的 start_url，
+// 带参数的 URL 根本打不开，用户就没有任何途径写这个令牌了。
+function updatePublishKeyHint() {
+  var el = document.getElementById('menuPubKey');
+  if (!el) return;
+  el.textContent = '🔑 发布令牌：' + (publishToken() ? '已配置' : '未配');
+}
+// 编辑/清除发布令牌（PWA 里唯一的配置入口）
+async function editPublishToken() {
+  var cur = publishToken();
+  var desc = cur
+    ? '当前已配置（' + cur.slice(0, 8) + '…）。输入新令牌覆盖，输入 - 清除。'
+    : '还没配置。粘贴服务端的 PUBLISH_API_KEY（发布博客 / 存 IMA 都要用）。';
+  var v = await askInput('发布令牌', { desc: desc, password: true, allowEmpty: false });
+  if (v === null || v === undefined) return;      // 取消
+  v = String(v).trim();
+  if (v === '-') {
+    try { localStorage.removeItem(PUBLISH_TOKEN_KEY); } catch (_) {}
+    updatePublishKeyHint();
+    flash('发布令牌已清除');
+    return;
+  }
+  if (!v) return;
+  try { localStorage.setItem(PUBLISH_TOKEN_KEY, v); } catch (_) {}
+  updatePublishKeyHint();
+  flash('发布令牌已保存（发布博客 / 存 IMA 生效）');
 }
 
 async function blogPostJSON(url, json, extraHeaders, timeoutMs) {
