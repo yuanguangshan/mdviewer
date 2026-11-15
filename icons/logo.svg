@@ -1,16 +1,14 @@
+<!-- 配色：青 #22d3ee → 蓝 #2f6ef0。左侧半透明白=源码纹，中缝纯白=分界，右侧不透明白=渲染结果 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" role="img" aria-label="mdviewer">
   <title>mdviewer</title>
   <defs>
-    <linearGradient id="d1Bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1a1f2e"/><stop offset="1" stop-color="#0c0e14"/>
-    </linearGradient>
-    <linearGradient id="d1Seam" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#4f46e5"/>
+    <linearGradient id="bg_teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#2f6ef0"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#d1Bg)"/>
-  <!-- 左：源码纹（细、密、暗） -->
-  <g fill="#4a5368">
+  <rect width="512" height="512" rx="112" fill="url(#bg_teal)"/>
+  <!-- 左侧：源码纹（半透明白，压在彩底上） -->
+  <g fill="#ffffff" fill-opacity="0.34">
     <rect x="96" y="146" width="46" height="15" rx="7.5"/>
     <rect x="152" y="146" width="34" height="15" rx="7.5"/>
     <rect x="96" y="188" width="26" height="15" rx="7.5"/>
@@ -21,11 +19,11 @@
     <rect x="96" y="314" width="34" height="15" rx="7.5"/>
     <rect x="140" y="314" width="44" height="15" rx="7.5"/>
   </g>
-  <!-- 中缝：源码 → 渲染 的分界 -->
-  <rect x="236" y="112" width="22" height="288" rx="11" fill="url(#d1Seam)"/>
-  <!-- 右：渲染结果（粗标题 + 正文） -->
-  <rect x="288" y="146" width="118" height="36" rx="12" fill="#f2f5fa"/>
-  <g fill="#7c869c">
+  <!-- 中缝 -->
+  <rect x="236" y="112" width="22" height="288" rx="11" fill="#ffffff"/>
+  <!-- 右侧：渲染结果 -->
+  <rect x="288" y="146" width="118" height="36" rx="12" fill="#ffffff"/>
+  <g fill="#ffffff" fill-opacity="0.42">
     <rect x="288" y="212" width="118" height="14" rx="7"/>
     <rect x="288" y="242" width="98"  height="14" rx="7"/>
     <rect x="288" y="272" width="110" height="14" rx="7"/>
