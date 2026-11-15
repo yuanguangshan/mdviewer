@@ -139,7 +139,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.45';
+const APP_VERSION = '4.46';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -5145,6 +5145,18 @@ function updateNasMenuHint() {
   if (ul) ul.textContent = '📤 存到 NAS' + suffix;
 }
 updateNasMenuHint();
+// PWA 从后台被唤起时不会重新加载页面，但 localStorage 可能已经被改过
+//（比如在别的标签页填了凭据、或者上一次会话末尾刚保存就切走了）。
+// 结果就是菜单上一直挂着「（需凭据）」，用户以为保存没生效，只能退出重开。
+// 这里在页面重新可见 / 窗口重新聚焦时重算一次，代价是两次 localStorage 读取。
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) updateNasMenuHint();
+});
+window.addEventListener('focus', updateNasMenuHint);
+// 别的标签页改了 localStorage 时同步（同源窗口之间会广播 storage 事件）
+window.addEventListener('storage', function (e) {
+  if (e.key === 'nas-auth' || e.key === null) updateNasMenuHint();
+});
 
 function nasBasicAuth() {
   const auth = localStorage.getItem('nas-auth') || '';
