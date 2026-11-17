@@ -148,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.49';
+const APP_VERSION = '4.50';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -482,7 +482,7 @@ function insertPodcastAtCursor(url) {
   if (editor.value.indexOf(url) !== -1) { flash('本文已包含该播客'); return false; }
   const s = editor.selectionStart, e = editor.selectionEnd;
   const text = '\n[🎧 播客版](' + url + ')\n';
-  editor.value = editor.value.slice(0, s) + text + editor.value.slice(e);
+  replaceRange(s, e, text, { label: '插入' });
   editor.selectionStart = editor.selectionEnd = s + text.length;
   afterChange();
   return true;
@@ -519,7 +519,17 @@ function startPodcastPoll(docTitle) {
   _podcastPollTimer = setTimeout(tick, INTERVAL);
 }
 // 文档「打开/载入」时调用：匹配 feed 集，命中则在顶部插入播放器；未命中则启动轮询（生成中的播客稍后自动匹配）
+// 播客自动匹配：默认关闭。
+// 原来每次打开文档都会请求 pic.want.biz 的 feed（公网站点的每个访客都向作者服务器
+// 报到一次），命中后还会**静默修改正文**并触发回写 —— 包括别人的协作文档，
+// 再分享出去就把这段内容带给了对方。改成显式开关，默认关。
+const PODCAST_AUTO_KEY = 'md-podcast-auto';
+function podcastAutoEnabled() {
+  try { return localStorage.getItem(PODCAST_AUTO_KEY) === '1'; } catch (_) { return false; }
+}
+
 async function syncPodcastOnLoad() {
+  if (!podcastAutoEnabled()) return;   // 默认不做任何请求、不改正文
   try {
     stopPodcastPoll();   // 切文档时先取消上一次轮询
     if (currentName === '未命名.md' && !/^#\s/m.test(editor.value)) return;
@@ -1032,13 +1042,19 @@ function renderMarkdown(opts) {
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   // 两侧共用同一个 slugger + 同一遍历顺序：同名标题依次得到「标题」「标题-2」…
   // 修复：旧实现直接 h.id = slugify(text)，两节「## 总结」会产生重复 id，目录只能跳到第一个。
+  // 标题里可能含公式占位符（## 质能 $E=mc^2$ → "质能 xMDVMATHx0x"）。
+  // 此时 h.textContent 还是占位符，直接 slug 会得到 质能-xmdvmathx0x，
+  // 而 buildHeadingLineMap 从源码算的是 质能-emc2 → 锚点同步失效、目录里显示乱码。
+  // 所以先把占位符还原成 TeX 源码再 slug；回填 KaTeX 是后面异步做的，不影响这里。
+  const mathRestore = restoreMathSource(lastMath.blocks, lastMath.tokenBase);
   const slugger = createSlugger();
   preview.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
-    const id = slugger(h.textContent);
+    const textForSlug = mathRestore(h.textContent || '');
+    const id = slugger(textForSlug);
     if (id) h.id = id;
   });
   headingLineMap = buildHeadingLineMap(editor.value);   // 同为 createSlugger + stripInlineMd，一一对应
-  buildToc();   // 同步重建右侧目录大纲（标题已就绪，含 id）
+  buildToc(mathRestore);   // 同步重建右侧目录大纲（标题已就绪，含 id）
   lastSanitizedHtml = snapshotPreviewHtml();   // 快照（保留 libimg:// 引用，供导出时内联为 data URL）
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
@@ -2038,11 +2054,24 @@ function scrollEditorToLine(line) {
 // 切换到预览时，把预览定位到编辑器当前所在章节（即时滚动，切换瞬间无需平滑）。
 // 编辑模式下目录跳转可靠，配合此函数即可「编辑定位 → 切预览保持」，绕开预览模式滚动顽疾。
 function syncPreviewToLine(lineNo) {
-  const lines = editor.value.split('\n');
+  // 反查 headingLineMap（行号 → slug）而不是自己再 slug 一遍：
+  // 自己算的规则和 buildHeadingLineMap 不一致 —— 没去行内标记（## **加粗** 会算错）、
+  // 没用 slugger 去重（两节「## 总结」只有第一个能命中）、也没跳过代码块里的 # 注释。
   let targetSlug = null;
-  for (let i = Math.min(lineNo, lines.length - 1); i >= 0; i--) {
-    const m = lines[i] && lines[i].match(/^#{1,6}\s+(.*)$/);
-    if (m) { targetSlug = slugify(m[1]); break; }
+  // headingLineMap 是 Map<slug, 行号(0 基)>；取「行号不超过当前行的最大那个」。
+  if (headingLineMap && typeof headingLineMap.forEach === 'function' && headingLineMap.size) {
+    let best = -1;
+    headingLineMap.forEach((ln, slug) => {
+      if (ln <= lineNo && ln > best) { best = ln; targetSlug = slug; }
+    });
+  }
+  if (!targetSlug) {
+    // 兜底：map 还没建好（首次渲染中）时退回旧做法
+    const lines = editor.value.split('\n');
+    for (let i = Math.min(lineNo, lines.length - 1); i >= 0; i--) {
+      const m = lines[i] && lines[i].match(/^#{1,6}\s+(.*)$/);
+      if (m) { targetSlug = slugify(stripInlineMd(m[1])); break; }
+    }
   }
   if (!targetSlug) return;   // 在任何标题之前 → 保持顶部
   let h = null;
@@ -2080,8 +2109,10 @@ let tocOpen = localStorage.getItem('md-toc') === '1';   // 开关状态持久化
 let tocSpyRaf = 0;
 
 // 渲染后重建目录：遍历预览里的所有标题，按层级缩进生成可点击条目
-function buildToc() {
+// @param {Function} [mathRestore] 把标题里的公式占位符还原成 TeX 源码（可选）
+function buildToc(mathRestore) {
   if (!tocList) return;
+  const fix = typeof mathRestore === 'function' ? mathRestore : (x) => x;
   const heads = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
   tocList.innerHTML = '';
   if (!heads.length) {
@@ -2092,7 +2123,8 @@ function buildToc() {
   const frag = document.createDocumentFragment();
   heads.forEach((h) => {
     const level = h.tagName.slice(1);
-    const text = (h.textContent || '').trim();
+    // 目录文字用还原后的标题（含公式时不再显示 xMDVMATHx0x）
+    const text = fix((h.textContent || '').trim());
     const slug = h.id || slugify(text);
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -2942,20 +2974,12 @@ $('#btnNew').addEventListener('click', async () => {
   resetDocContext();                         // 新建同样要清 shareId（否则会覆盖别人的协作文档）
   currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
   localStorage.removeItem('md-lib-current');
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) {
-      editor.value = text;
-      flash('已从剪贴板创建');
-    } else {
-      editor.value = '';
-      flash('已新建');
-    }
-  } catch {
-    // 无剪贴板权限或剪贴板为空 → 新建空白文档
-    editor.value = '';
-    flash('已新建');
-  }
+  // 「新建」默认就是空白文档，不再自动读剪贴板。
+  // 原来每次都读：剪贴板里若是密码或 Token，会被立刻写进草稿（localStorage），
+  // 文库文档还会同步到 NAS；而且每点一次都可能弹权限框。
+  // 想要"从剪贴板新建"用菜单里的独立入口。
+  editor.value = '';
+  flash('已新建');
   currentFileHandle = null;
   currentName = '未命名.md';
   currentNameIsAuto = false;
@@ -3274,6 +3298,13 @@ function resetDocContext() {
   currentShareId = null;
   currentFileHandle = null;
   docTrust = 'own';          // 默认信自家内容；打开别人的文档时由调用方改成 'untrusted'
+  // 外部只读是"当前这份文档"的属性，不是全局开关。不清掉的话，
+  // 只读模式下打开文库/新建的文档会继承 readOnly，新文档打不了字。
+  remoteOrigin = null;
+  remoteHref = '';
+  editor.readOnly = false;
+  try { document.body.classList.remove('remote-mode'); } catch (_) {}
+  try { hideRemoteBanner(); } catch (_) {}
   resetUndo();
   try { stopPodcastPoll(); } catch (_) {}
   currentSearchHit = null;
@@ -3646,11 +3677,8 @@ const FORMAT_ACTIONS = {
     if (trimmed) {
       // 用户输入了 URL → 插入 Markdown 图片语法
       const insert = '![' + alt + '](' + trimmed + ')';
-      editor.value = editor.value.slice(0, s) + insert + editor.value.slice(e);
       const pos = s + insert.length;
-      editor.selectionStart = editor.selectionEnd = pos;
-      editor.dispatchEvent(new Event('input'));
-      editor.focus();
+      replaceRange(s, e, insert, { label: '插入', select: [pos, pos] });
     } else {
       // 空 URL → 弹出文件选择器上传本地图片
       editor.focus();
@@ -3859,6 +3887,18 @@ async function streamAiApi(promptText, systemPrompt, onToken, opts) {
         }
       }
     }
+    // 流结束前把解码器里剩下的字节和没换行的最后一行冲出来。
+    // 部分代理会让最后一条 data: 不带结尾换行，不冲刷就丢掉最后一两个 token。
+    buffer += decoder.decode();
+    if (sseMode === true && buffer.trim()) {
+      const tail = buffer.trim();
+      if (tail.startsWith('data:')) {
+        if (tail.indexOf('finish_reason') >= 0 && tail.indexOf('"length"') >= 0) truncated = true;
+        const delta = parseSseLine(tail);
+        if (delta) { full += delta; if (onToken) onToken(delta, full); }
+      }
+      buffer = '';
+    }
     if (sseMode === false) {
       const data = JSON.parse(buffer.trim());
       full = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '').trim();
@@ -3988,9 +4028,16 @@ function aiProcessSelection(systemPrompt, label) {
     label: 'AI ' + label,
     systemPrompt, promptText: selected,
     onApply: (full) => {
-      editor.value = editor.value.slice(0, s) + full + editor.value.slice(e);
-      editor.selectionStart = s;
-      editor.selectionEnd = s + full.length;
+      // 流式期间用户可能继续编辑：先确认原选区还在原处，否则按光标处插入，
+      // 不然会用过期下标 splice，把文档切坏。
+      const cur = editor.value;
+      if (cur.slice(s, e) === selected) {
+        replaceRange(s, e, full, { label: 'AI ' + label, select: [s, s + full.length] });
+      } else {
+        const at = editor.selectionStart;
+        replaceRange(at, at, full, { label: 'AI ' + label });
+        toast('原文已变动，已插入到光标处', 'warn', 4000);
+      }
       afterChange();
       toast('已' + label + '选中文字', 'ok');
     }
@@ -4022,7 +4069,7 @@ async function aiSocialRewrite(mode) {
       // 保留用户原稿：有选区时把爆款文案追加其后，无选区则插入光标处（绝不在回调内二次读 editor.selection*）
       const insertText = '\n\n' + full.trim() + '\n\n';
       if (e > s) {
-        editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
+        replaceRange(e, e, insertText, { label: '插入' });
         editor.selectionStart = editor.selectionEnd = e + insertText.length;
       } else {
         insertAtCursor(insertText);
@@ -4172,7 +4219,7 @@ const AI_ACTIONS = {
         const text = full + '\n\n';
         // 有选区：用生成结果替换选区（选区本身即提示词种子）；无选区：插入光标处
         if (e > s) {
-          editor.value = editor.value.slice(0, s) + text + editor.value.slice(e);
+          replaceRange(s, e, text, { label: '插入' });
           editor.selectionStart = editor.selectionEnd = s + text.length;
         } else {
           insertAtCursor(text);
@@ -4204,7 +4251,7 @@ const AI_ACTIONS = {
         // 防止用户手写正文中出现的「第X章」被 aiWriteNextChapter 误当成大纲章节。
         const insertText = '\n\n' + full.trim() + '\n\n<!-- ai-chapter:0 -->\n\n';
         if (e > s) {
-          editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
+          replaceRange(e, e, insertText, { label: '插入' });
           editor.selectionStart = editor.selectionEnd = e + insertText.length;
         } else {
           insertAtCursor(insertText);
@@ -4414,7 +4461,7 @@ const AI_ACTIONS = {
 
         if (e > s) {
           // 划词触发：追加在选中文字后方（保留原文）
-          editor.value = editor.value.slice(0, e) + insertText + editor.value.slice(e);
+          replaceRange(e, e, insertText, { label: '插入' });
           editor.selectionStart = editor.selectionEnd = e + insertText.length;
         } else {
           // 弹窗触发：插入光标处
@@ -5597,7 +5644,12 @@ function setSyncDot(state, title) {
 const syncLibraryToNasDebounced = debounce(syncLibraryToNas, SYNC_DEBOUNCE_MS);
 
 // 增量同步文库到 NAS：只传 updatedAt 晚于上次同步时间的文档
+// 并发守卫：编辑去抖、3 分钟定时、online 事件可能同时触发同步，
+// 同一篇会被并发上传两次（NAS 同名会留一份 _时间戳 副本）。
+let _libSyncing = false;
+
 async function syncLibraryToNas() {
+  if (_libSyncing) return;                 // 上一轮还没跑完，直接跳过这一轮
   if (!navigator.onLine) { setSyncDot('idle', '离线，待联网后补传'); return; }
   const auth = localStorage.getItem('nas-auth');
   if (!auth) { setSyncDot('idle', '未配置 NAS 凭据，跳过自动同步'); return; }
@@ -5624,13 +5676,18 @@ async function syncLibraryToNas() {
   if (!pending.length) { setSyncDot('ok', '已是最新'); return; }
 
   setSyncDot('syncing', '正在同步 ' + pending.length + ' 篇到 NAS…');
+  _libSyncing = true;
   let ok = 0, fail = 0;
+  try {
   for (const doc of pending) {
     try {
-      const blob = new Blob([doc.content || ''], { type: 'text/markdown' });
+      // 用 .txt 而不是 .md：NAS 对 .md 会跑「AI 提标题 + 归档」流水线，
+      // 同名再传还会留一份 _时间戳 副本 —— 文库每改一次就多一份归档，越同步越脏。
+      // 文库的正文本来就在 IndexedDB 里，NAS 这份只是异地备份，不需要被当成知识库条目。
+      const blob = new Blob([doc.content || ''], { type: 'text/plain' });
       if (blob.size > NAS_MAX_BYTES) { state[doc.id] = doc.updatedAt; ok++; continue; } // 超大跳过但标记已同步，避免反复尝试
       const fd = new FormData();
-      fd.append('file', blob, doc.id + '.md');
+      fd.append('file', blob, doc.id + '.txt');
       const resp = await fetch(NAS_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Authorization': authHeader },
@@ -5641,6 +5698,7 @@ async function syncLibraryToNas() {
       ok++;
     } catch (_) { fail++; }
   }
+  } finally { _libSyncing = false; }
   saveSyncState(state);
   if (fail === 0) setSyncDot('ok', '已同步 ' + ok + ' 篇到 NAS（' + new Date().toLocaleTimeString() + '）');
   else setSyncDot('error', ok + ' 篇成功，' + fail + ' 篇失败（下次补传）');
@@ -6322,11 +6380,15 @@ function jumpTableCell(backward) {
 // === SECTION: 全局快捷键（Map 化：组合键归一化为 "mod+alt+shift+key"） ===
 // mod = Ctrl(Linux/Win) 或 ⌘(macOS)；alt = Alt / ⌥；shift = Shift / ⇧
 // 新增快捷键：在 SHORTCUTS 追加一行 + 在 ACTION_HINTS 登记对应菜单项即可，
+// 这些快捷键即使在输入框里也要生效（保存、命令面板、搜索等"随时可用"的操作）
+const GLOBAL_SHORTCUTS = new Set(['mod+s', 'mod+shift+p', 'mod+f', 'mod+shift+f', 'mod+shift+k']);
+
 const SHORTCUTS = new Map([
   // 文件 / 文档
   ['mod+s', saveFile],
   ['mod+o', openFile],
   ['mod+alt+n', () => { const b = $('#btnNew'); if (b) b.click(); }],
+  ['mod+alt+shift+n', newFromClipboard],       // 显式的「从剪贴板新建」
   ['mod+shift+r', renameFile],
   ['f2', renameFile],
   ['mod+shift+l', addToLibrary],
@@ -6380,8 +6442,20 @@ document.addEventListener('keydown', (e) => {
   const k = (e.key || '').toLowerCase();
   if (['control', 'meta', 'alt', 'shift', 'tab'].includes(k)) return;   // 忽略纯修饰键 / Tab 由编辑器处理
   parts.push(k);
-  const handler = SHORTCUTS.get(parts.join('+'));
-  if (handler) { e.preventDefault(); handler(); }
+  const combo = parts.join('+');
+  const handler = SHORTCUTS.get(combo);
+  if (!handler) return;
+  // 焦点在别的输入框里（查找框、AI 提示词、命令面板、重命名框…）时，
+  // 格式类快捷键不该去改正文 —— 在查找框里按 Ctrl+B 会把编辑器里的字加粗，
+  // 这是纯粹的误操作。少数"全局"快捷键允许穿透。
+  const t = e.target;
+  const inEditor = t === editor || t === document.body;
+  if (!inEditor && t && t.closest) {
+    const inField = t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
+    if (inField && !GLOBAL_SHORTCUTS.has(combo)) return;
+  }
+  e.preventDefault();
+  handler();
 });
 
 // === SECTION: 菜单快捷键提示（自动渲染，无需手写每处） ===
@@ -7165,6 +7239,23 @@ async function addToLibrary() {
   } catch (_) { flash('加入失败'); }
 }
 
+/* 从剪贴板新建（显式操作，不再藏在「新建」里自动做） */
+async function newFromClipboard() {
+  if (editor.value.trim() && !(await askConfirm('从剪贴板新建', '未保存的内容将丢失。'))) return;
+  let text = '';
+  try { text = await navigator.clipboard.readText(); } catch (_) {}
+  if (!text) { flash('剪贴板是空的或没有权限'); return; }
+  resetDocContext();
+  currentLibId = null;
+  localStorage.removeItem('md-lib-current');
+  editor.value = text;
+  currentName = '未命名.md';
+  currentNameIsAuto = false;
+  updateFileName();
+  afterChange();
+  flash('已从剪贴板新建（' + text.length + ' 字）');
+}
+
 /* 文库条目下载为 .md 文件 */
 async function downloadLibDoc(id) {
   try {
@@ -7880,6 +7971,7 @@ function vimHalfPage() {
 // 安全替换 textarea 区间文本并保留原生撤销栈（避免 editor.value= 清空撤销历史，使 Vim 的 u 失效）
 // 优先 execCommand('insertText')（触发 input 事件、保留 Undo）；极旧环境兜底 setRangeText（会丢撤销栈）
 function replaceTextSafely(start, end, newText, caretPos) {
+  if (editor.readOnly) return false;        // 只读文档：Vim 的 x/dd/ciw 一律不生效
   editor.focus();
   editor.setSelectionRange(start, end);
   let ok = false;
