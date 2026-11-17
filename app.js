@@ -148,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.51';
+const APP_VERSION = '4.52';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -2974,12 +2974,15 @@ $('#btnNew').addEventListener('click', async () => {
   resetDocContext();                         // 新建同样要清 shareId（否则会覆盖别人的协作文档）
   currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
   localStorage.removeItem('md-lib-current');
-  // 「新建」默认就是空白文档，不再自动读剪贴板。
-  // 原来每次都读：剪贴板里若是密码或 Token，会被立刻写进草稿（localStorage），
-  // 文库文档还会同步到 NAS；而且每点一次都可能弹权限框。
-  // 想要"从剪贴板新建"用菜单里的独立入口。
-  editor.value = '';
-  flash('已新建');
+  // 剪贴板有内容就带过来，没有就空白；不弹任何提示。
+  // （v4.51 曾按评估建议改成一律空白，实际用起来很别扭，已回退。）
+  try {
+    const text = await navigator.clipboard.readText();
+    editor.value = text || '';
+  } catch (_) {
+    // 无剪贴板权限（非安全上下文 / 用户拒绝）→ 新建空白文档
+    editor.value = '';
+  }
   currentFileHandle = null;
   currentName = '未命名.md';
   currentNameIsAuto = false;
