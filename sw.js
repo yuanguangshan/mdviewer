@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v4.47';
+const CACHE_NAME = 'md-editor-v4.48';
 
 const SHELL = [
   './',
@@ -103,7 +103,10 @@ self.addEventListener('fetch', (event) => {
   // 首屏快、离线可用；命中即返回，同时后台用网络响应刷新缓存（stale-while-revalidate）。
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(req);
+    // ignoreSearch：页面引用的是 ./lib/md-core.js?v=4.47，而预缓存里的 key 不带
+    // 查询串。不忽略的话带版本号的请求永远 miss → 首次断网打开时 md-core /
+    // marked / purify / highlight 全部拿不到，白屏。
+    const cached = (await cache.match(req)) || (await cache.match(req, { ignoreSearch: true }));
     if (cached) {
       const revalidate = async () => {
         try {

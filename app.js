@@ -139,7 +139,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.47';
+const APP_VERSION = '4.48';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1439,9 +1439,14 @@ function capDevId() {
   let d = '';
   try { d = localStorage.getItem(CAP_DEV_KEY) || ''; } catch (_) {}
   if (!/^[0-9a-z]{6}$/.test(d)) {
-    const a = new Uint8Array(4);
+    // 原来只取 4 个字节 → 生成 4 个字符，而上面的正则要求 6 个，
+    // 于是校验永远失败、每次调用都重新生成：一次保存里文件名 / JSON / 索引 /
+    // 本地缓存会拿到 4 个不同的 dev，"设备 xxxx"这个标识完全失效。
+    // 现在取 6 个字节，一对一映射成 6 个字符。
+    const A = '0123456789abcdefghijklmnopqrstuvwxyz';
+    const a = new Uint8Array(6);
     crypto.getRandomValues(a);
-    d = Array.from(a).map((b) => (b % 36).toString(36)).join('').slice(0, 6);
+    d = Array.from(a, (b) => A[b % 36]).join('');
     try { localStorage.setItem(CAP_DEV_KEY, d); } catch (_) {}
   }
   return d;
@@ -1534,14 +1539,31 @@ function capIdxPick(it, prev) {
 async function capWriteIndex(items, auth) {
   const uniq = new Map();
   for (const it of items) if (it && it.id) uniq.set(it.id, capIdxPick(it, uniq.get(it.id)));
-  const list = Array.from(uniq.values()).sort((a, b) => a.at - b.at).slice(-800);
+  // 裁剪时先保墓碑再保普通条目：墓碑是「这条已被删除」的唯一记录，
+  // 一旦被 slice(-800) 按时间淘汰掉，那条内容就会在下一次同步时重新出现。
+  const all = Array.from(uniq.values()).sort((a, b) => a.at - b.at);
+  const tombs = all.filter((x) => x.del);
+  const live = all.filter((x) => !x.del);
+  const room = Math.max(0, 800 - tombs.length);
+  const list = tombs.concat(room > 0 ? live.slice(-room) : []).sort((a, b) => a.at - b.at);
   await capPutJson(capIdxName(), { v: 1, items: list }, auth);
 }
+// 索引写入必须串行：capMergeIndex 是「读 → 合并 → 写」三步，
+// 而 capFlushPending 会在循环里对多条待传记录并发调用它（还 .catch() 掉不 await），
+// 两个合并同时跑就会各自读到同一份旧索引、各自写回，后写的覆盖先写的 →
+// 新增条目凭空消失。这里用一条 promise 链把所有合并排队。
+let capIdxChain = Promise.resolve();
+
 async function capMergeIndex(newItems, auth) {
-  const cur = (await capReadIndex(auth)) || [];
-  const map = new Map();
-  for (const it of cur.concat(newItems)) if (it && it.id) map.set(it.id, capIdxPick(it, map.get(it.id)));
-  await capWriteIndex(Array.from(map.values()), auth);
+  const run = async () => {
+    const cur = (await capReadIndex(auth)) || [];
+    const map = new Map();
+    for (const it of cur.concat(newItems)) if (it && it.id) map.set(it.id, capIdxPick(it, map.get(it.id)));
+    await capWriteIndex(Array.from(map.values()), auth);
+  };
+  // 链上任何一环失败都不能让后续全部卡死：catch 掉再继续
+  capIdxChain = capIdxChain.then(run, run);
+  return capIdxChain;
 }
 
 // 兜底：索引丢了就扫目录（uploads 是平铺两万多个文件、2.7MB，5~8 秒，只在深度同步时用）
@@ -2726,6 +2748,7 @@ async function openFile() {
       const [handle] = await window.showOpenFilePicker({
         types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown', '.txt'] } }],
       });
+      resetDocContext();                         // 先清 shareId / handle / undo，再设置本次的
       currentFileHandle = handle;
       const file = await handle.getFile();
       currentName = file.name;
@@ -2733,7 +2756,6 @@ async function openFile() {
       currentLibId = null;                       // 打开本地文件 → 脱离文库上下文
       localStorage.removeItem('md-lib-current');
       editor.value = await file.text();
-      resetUndo();                               // 换文档 → 旧的撤销快照不再合法
       updateFileName();
       afterChange();
       syncPodcastOnLoad();
@@ -2750,6 +2772,7 @@ fileInput.addEventListener('change', (e) => {
   if (!f) return;
   const reader = new FileReader();
   reader.onload = () => {
+    resetDocContext();                         // 降级路径同样要清 shareId / handle / undo
     editor.value = reader.result;
     currentName = f.name;
     currentNameIsAuto = false;
@@ -2887,9 +2910,9 @@ function ensureNameFromContent() {
 // === SECTION: 新建 / 重命名 ===
 $('#btnNew').addEventListener('click', async () => {
   if (editor.value.trim() && !(await askConfirm('新建文档', '未保存的内容将丢失。'))) return;
+  resetDocContext();                         // 新建同样要清 shareId（否则会覆盖别人的协作文档）
   currentLibId = null;                       // 顶部「新建」为独立草稿，脱离文库上下文
   localStorage.removeItem('md-lib-current');
-  resetUndo();
   try {
     const text = await navigator.clipboard.readText();
     if (text) {
@@ -3207,6 +3230,26 @@ let undoBytes = 0;
 
 function resetUndo() { undoStack = []; redoStack = []; undoBytes = 0; }
 
+/**
+ * 切换文档时必须一起清掉的「文档上下文」。
+ *
+ * 为什么要有这个函数：现在有 9 条把内容载入编辑器的路径（openFile / fileInput /
+ * 新建 / 文库 / nasOpen / ?open= / ?nas= / ?url= / share_r2）。每条都要手动重置
+ * 七八个变量，漏一个就是一类数据事故：
+ *   · currentShareId 不清 → 点「生成分享链接」会把协作者的文档整篇覆盖
+ *   · currentFileHandle 不清 → Ctrl+S 把新内容原地写进上一个本地文件
+ *   · undo 栈不清 → Ctrl+Z 把上一篇的快照套到当前文档上，再保存就串了
+ * 新增加载路径时**务必**先调这个，再设置自己需要的字段。
+ */
+function resetDocContext() {
+  currentShareId = null;
+  currentFileHandle = null;
+  resetUndo();
+  try { stopPodcastPoll(); } catch (_) {}
+  currentSearchHit = null;
+  lastRenderedSrc = null;
+}
+
 function pushUndo(label) {
   const snap = { v: editor.value, s: editor.selectionStart, e: editor.selectionEnd, label: label || '编辑' };
   undoStack.push(snap);
@@ -3499,16 +3542,46 @@ const TEXT_ACTIONS = {
 // === SECTION: 选区包裹 / 行前缀（格式化快捷键的底层原语） ===
 // wrapSelection：用 before/after 包裹当前选区；无选区则插入占位文字并把光标落在内部。
 // prefixLines：对选区所跨的整行逐行施加变换（引用 / 列表 / 标题用）。
+/**
+ * 替换编辑器里 [s, e) 这段内容 —— 所有程序化改写的唯一入口。
+ *
+ * 为什么不能直接 `editor.value = ...`：那样会让浏览器清空**原生撤销栈**，
+ * 而自建 undo 栈又没 push，结果就是「按了 Ctrl+B 加粗，再按 Ctrl+Z 什么都不会发生」。
+ * Tab 缩进是最高频的受害者：写代码块时几乎每行都要按，撤销历史被一路清空。
+ *
+ * execCommand('insertText') 虽然被标了 deprecated，但它是目前**唯一**能把改动
+ * 写进原生撤销栈的办法，主流浏览器（含 iOS Safari）都支持。失败时退回
+ * setRangeText + 自建快照，保证功能不丢，只是撤销粒度变粗。
+ *
+ * @returns {boolean} 是否真的改写了内容（只读模式下返回 false）
+ */
+function replaceRange(s, e, text, opts) {
+  opts = opts || {};
+  if (editor.readOnly) return false;
+  s = Math.max(0, Math.min(s, editor.value.length));
+  e = Math.max(s, Math.min(e, editor.value.length));
+  editor.focus();
+  try { editor.setSelectionRange(s, e); } catch (_) {}
+  let ok = false;
+  try { ok = document.execCommand('insertText', false, text); } catch (_) { ok = false; }
+  if (!ok) {
+    // 兜底：没有原生撤销栈，就自己存一份快照
+    pushUndo(opts.label || '编辑');
+    editor.setRangeText(text, s, e, 'end');
+    editor.dispatchEvent(new Event('input'));
+  }
+  if (opts.select) {
+    try { editor.setSelectionRange(opts.select[0], opts.select[1]); } catch (_) {}
+  }
+  return true;
+}
+
 function wrapSelection(before, after, placeholder) {
   const s = editor.selectionStart, e = editor.selectionEnd;
   const sel = editor.value.slice(s, e) || placeholder || '';
   const insert = before + sel + after;
-  editor.value = editor.value.slice(0, s) + insert + editor.value.slice(e);
   const ns = s + before.length;
-  editor.selectionStart = ns;
-  editor.selectionEnd = ns + sel.length;
-  editor.focus();
-  editor.dispatchEvent(new Event('input'));
+  replaceRange(s, e, insert, { label: '格式', select: [ns, ns + sel.length] });
 }
 function prefixLines(fn) {
   const s = editor.selectionStart, e = editor.selectionEnd;
@@ -3517,11 +3590,7 @@ function prefixLines(fn) {
   let le = v.indexOf('\n', e); if (le === -1) le = v.length;
   const block = v.slice(ls, le);
   const out = block.split('\n').map((ln, i) => fn(ln, i)).join('\n');
-  editor.value = v.slice(0, ls) + out + v.slice(le);
-  editor.selectionStart = ls;
-  editor.selectionEnd = ls + out.length;
-  editor.focus();
-  editor.dispatchEvent(new Event('input'));
+  replaceRange(ls, le, out, { label: '行前缀', select: [ls, ls + out.length] });
 }
 function setHeading(level) {
   const hashes = '#'.repeat(level) + ' ';
@@ -5457,6 +5526,7 @@ async function nasOpen(input) {
     } catch (_) {}
     toast('📌 本地内容已备份到本机草稿（localStorage 的 md-nas-backup-latest），可随时找回', 'info', 6000);
   }
+  resetDocContext();                   // 必须最先做：清掉 shareId / fileHandle / undo
   currentLibId = null;                 // 脱离文库上下文，作为独立草稿
   currentName = filename;
   currentNameIsAuto = false;
@@ -6155,9 +6225,9 @@ editor.addEventListener('keydown', (e) => {
     // 判定很保守：当前行必须是表格行（以 | 开头），且光标在该行内。
     if (jumpTableCell(e.shiftKey)) return;
     const s = editor.selectionStart, en = editor.selectionEnd;
-    editor.value = editor.value.slice(0, s) + '  ' + editor.value.slice(en);
-    editor.selectionStart = editor.selectionEnd = s + 2;
-    editor.dispatchEvent(new Event('input'));
+    // 走 replaceRange 而不是直接赋值：后者会清空浏览器原生撤销栈，
+    // 写代码块时每按一次 Tab 就丢一次撤销历史。
+    replaceRange(s, en, '  ', { label: '缩进' });
   }
 });
 
@@ -6938,6 +7008,7 @@ async function renderLibrary() {
 
 /* 打开文库文档 → 载入编辑器，后续编辑自动回写 */
 function openLibDocData(doc) {
+  resetDocContext();                   // 从协作分享切到文库文档时，shareId 必须清掉
   currentLibId = doc.id;
   currentFileHandle = null;
   currentName = doc.name || '未命名.md';
@@ -7276,6 +7347,7 @@ async function openExternalDocFromQuery() {
       toast(`❌ 打不开该文档（HTTP ${resp.status}）`, 'err');
       return false;          // 回退到文库/草稿，别把用户卡在空页面
     }
+    resetDocContext();       // ?open= 也要清 fileHandle（否则 Ctrl+S 会覆盖上一个本地文件）
     editor.value = await resp.text();
     currentLibId = null;
     currentShareId = null;   // 外部文档不是协作文档，避免「生成协作链接」误覆盖别人的分享
@@ -7322,6 +7394,7 @@ async function openNasDocFromQuery() {
   flash('正在从 NAS 取回 ' + filename + '…');
   const text = await downloadFromNas(filename);
   if (text == null) return false;             // 凭据缺失/网络失败：交给正常启动流程
+  resetDocContext();       // 清 shareId / fileHandle / undo 三件套
   editor.value = text;
   currentLibId = null;
   currentShareId = null;

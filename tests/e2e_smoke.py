@@ -68,7 +68,7 @@ def main():
         return 1
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
+        browser = pw.chromium.launch(executable_path="/usr/bin/chromium", args=["--no-sandbox"])
 
         # ---------- 1. 启动无报错 ----------
         print("\n[1] 启动与渲染")
