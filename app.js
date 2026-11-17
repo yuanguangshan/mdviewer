@@ -148,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.50';
+const APP_VERSION = '4.51';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -3017,7 +3017,11 @@ async function inlineLibImages(html) {
 // === SECTION: 复制 HTML（复用预览结果） ===
 async function copyHTML() {
   try {
-    const html = await inlineLibImages(lastSanitizedHtml || preview.innerHTML);
+    // 和 exportHTML 一样必须先等异步渲染：KaTeX 画完前取到的只是 "$...$" 源码，
+    // mermaid 没画完则是空白占位。
+    try { await mermaidRendering; } catch (_) {}
+    try { await mathRendering; } catch (_) {}
+    const html = await inlineLibImages(snapshotPreviewHtml() || lastSanitizedHtml || preview.innerHTML);
     await navigator.clipboard.writeText(html);
     flash('已复制 HTML');
   } catch {
@@ -3237,6 +3241,7 @@ async function exportPDF() {
   }
   flash('正在生成 PDF…');
   try { await mermaidRendering; } catch (_) {}   // 等图表画完再截图，避免 PDF 里出现空白占位
+  try { await mathRendering; } catch (_) {}      // 公式同理：不等就是 $...$ 源码进 PDF
   // 克隆预览内容到 off-screen 容器，强制亮色主题，不受当前视图 / 暗色主题影响
   const wrapper = document.createElement('div');
   wrapper.setAttribute('data-theme', 'light');
@@ -3676,7 +3681,7 @@ const FORMAT_ACTIONS = {
     const trimmed = url.trim();
     if (trimmed) {
       // 用户输入了 URL → 插入 Markdown 图片语法
-      const insert = '![' + alt + '](' + trimmed + ')';
+      const insert = '![' + mdAltText(alt) + '](' + trimmed + ')';
       const pos = s + insert.length;
       replaceRange(s, e, insert, { label: '插入', select: [pos, pos] });
     } else {
@@ -4143,7 +4148,9 @@ function askInput(title, opts) {
 function askConfirm(title, msg) {
   return new Promise((resolve) => {
     const m = document.getElementById('confirmModal');
-    if (!m) return resolve(true);                                        // 无容器兜底：默认继续
+    // 无容器兜底：返回 false（取消）。
+    // 原来默认 true —— 一旦弹窗容器缺失，删除、覆盖这类危险操作会**自动执行**。
+    if (!m) return resolve(false);
     const titleEl = document.getElementById('confirmModalTitle');
     const msgEl = document.getElementById('confirmModalMsg');
     if (titleEl) titleEl.textContent = title;
@@ -4744,8 +4751,10 @@ function getTextareaCaretPos(el, position) {
   div.appendChild(span);
   doc.body.appendChild(div);
   const coords = {
-    top: span.offsetTop + parseInt(style.borderTopWidth) || 0,
-    left: span.offsetLeft + parseInt(style.borderLeftWidth) || 0,
+    // 注意括号：写成 `span.offsetTop + parseInt(x) || 0` 时，parseInt 返回 NaN
+    // 会让整个加法变 NaN，再被 || 兜成 0 → 工具条跳到顶部。
+    top: span.offsetTop + (parseInt(style.borderTopWidth, 10) || 0),
+    left: span.offsetLeft + (parseInt(style.borderLeftWidth, 10) || 0),
     height: parseInt(style.lineHeight) || (parseInt(style.fontSize) * 1.2)
   };
   doc.body.removeChild(div);
@@ -6261,6 +6270,12 @@ async function compressImage(file) {
     return file;
   } catch (_) { return file; }
 }
+// Markdown 图片语法里，alt 文本中的 `]` 会提前闭合 `![...]`，导致后面的 URL 变成普通文本。
+// 反斜杠转义是 CommonMark 认可的做法。
+function mdAltText(name) {
+  return String(name || 'image').replace(/[\\[\]]/g, (m) => '\\' + m);
+}
+
 async function insertImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
   if (file.size > 2 * 1024 * 1024) {
@@ -6270,7 +6285,7 @@ async function insertImage(file) {
   // 文库不可用（无 IndexedDB）→ 回退 base64 内联，保证可用（压缩后体积已受控）
   if (!libDb) {
     const url = await fileToDataURL(img);
-    insertAtCursor('\n![' + (file.name || 'image') + '](' + url + ')\n');
+    insertAtCursor('\n![' + mdAltText(file.name) + '](' + url + ')\n');
     flash('已插入图片');
     return;
   }
@@ -6282,7 +6297,7 @@ async function insertImage(file) {
     flash('图片入库失败');
     return;
   }
-  insertAtCursor('\n![' + (file.name || 'image') + '](libimg://' + id + ')\n');
+  insertAtCursor('\n![' + mdAltText(file.name) + '](libimg://' + id + ')\n');
   flash('已插入图片');
 }
 editor.addEventListener('paste', (e) => {
@@ -8410,15 +8425,25 @@ async function exportBackup() {
       };
       files.push({ name: 'docs/' + d.id + '.json', data: enc.encode(JSON.stringify(meta, null, 2)) });
     }
+    // 图片要连 MIME 一起记：只存字节的话恢复时只能猜 application/octet-stream，
+    // 浏览器靠嗅探勉强能显示，但 <img> 的 type 语义、导出内联 data URL 都会失真。
+    const imageTypes = {};
     for (const id of keys) {
       try {
         const rec = await idbGetImage(id);
-        if (rec && rec.blob) files.push({ name: 'images/' + id, data: new Uint8Array(await rec.blob.arrayBuffer()) });
+        if (rec && rec.blob) {
+          imageTypes[id] = rec.type || rec.blob.type || 'application/octet-stream';
+          files.push({ name: 'images/' + id, data: new Uint8Array(await rec.blob.arrayBuffer()) });
+        }
       } catch (_) {}
     }
+    manifest.imageTypes = imageTypes;
+    files[0] = { name: 'manifest.json', data: enc.encode(JSON.stringify(manifest, null, 2)) };
     const zip = zipStore(files);
     download(backupFileName(), zip, 'application/zip');
-    toast('✅ 已导出备份：' + docs.length + ' 篇 / ' + humanBytes(zip.length), 'ok', 5000);
+    // 说明清楚备份的边界：用户以为"备份=全量"，恢复后才发现配置和主题没回来。
+    toast('✅ 已导出备份：' + docs.length + ' 篇 / ' + humanBytes(zip.length)
+      + '（只含文档与图片；AI 配置、主题、历史快照正文不在其中）', 'ok', 7000);
   } catch (e) {
     toast('备份失败：' + (e.message || e), 'err', 6000);
   }
@@ -8457,11 +8482,22 @@ backupFileInput.addEventListener('change', async () => {
       });
       ok++;
     }
+    // 从 manifest 取回原始 MIME（旧备份没有这个字段 → 退回按扩展名猜）
+    let imgTypes = {};
+    try { imgTypes = JSON.parse(dec.decode(byName.get('manifest.json'))).imageTypes || {}; } catch (_) {}
+    const guessMime = (fn) => {
+      const e = String(fn).toLowerCase().split('.').pop();
+      return { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+               webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif' }[e]
+        || 'application/octet-stream';
+    };
     let imgs = 0;
     for (const [name, data] of byName) {
       if (!name.startsWith('images/')) continue;
       try {
-        await idbPutImage({ id: name.slice(7), name: name.slice(7), type: 'application/octet-stream', blob: new Blob([data]) });
+        const id = name.slice(7);
+        const type = imgTypes[id] || guessMime(id);
+        await idbPutImage({ id, name: id, type, blob: new Blob([data], { type }) });
         imgs++;
       } catch (_) {}
     }
