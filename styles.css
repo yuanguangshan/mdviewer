@@ -1888,3 +1888,19 @@ select:focus-visible,
   color: var(--text); font-size: 12.5px;
 }
 .rap-more button[disabled] { opacity: .6; cursor: default; }
+
+/* 不可信内容里的远程图片：先占位，点一下才真的去请求（防 IP 泄露） */
+#preview img.remote-img-blocked {
+  display: inline-block;
+  min-width: 120px;
+  min-height: 64px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa3b2' stroke-width='1.6'><rect x='3' y='4' width='18' height='16' rx='2'/><circle cx='8.5' cy='9.5' r='1.6'/><path d='M4 17l5-5 4 4 3-3 4 4'/></svg>") center/32px no-repeat;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+  padding: 44px 8px 6px;
+}
+#preview img.remote-img-blocked:hover { border-color: var(--accent); }

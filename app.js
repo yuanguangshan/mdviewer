@@ -69,6 +69,15 @@ let currentShareId = null;       // 当前协作分享的 R2 文件名（null = 
 // 外部网址只读模式（v4.10）：非空 = 当前正文来自别人的网址，而不是「我的文档」。
 // 一旦置位，所有自动写入（草稿 / 文库回写 / 分享 / 发布 / 上传）必须被拦下。
 let remoteOrigin = null;         // 来源主机名，如 'raw.githubusercontent.com'
+// docTrust：内容**可不可信**，和"能不能编辑"是两件事。
+// 之前只有 remoteOrigin 一个变量，它同时表示"来自外网"+"只读"，于是协作分享
+// （?share_r2=，别人写的、但你可以编辑）落进了"自家文档"的宽松档：
+// 远程图片自动加载（暴露 IP）、<audio autoplay> 一打开就出声、
+// 消毒只做了 DOMPurify 默认级别。现在拆开：可编辑不代表可信任。
+//   'own'       自己写的（草稿 / 文库 / 本地文件 / 自己的 NAS）
+//   'untrusted' 别人的内容（协作分享、外部网址）
+let docTrust = 'own';
+function isUntrusted() { return docTrust === 'untrusted' || !!remoteOrigin; }
 let remoteHref = '';             // 完整来源地址（仅本会话，不落盘）
 let remoteLoading = false;
 // ============================================================
@@ -139,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.48';
+const APP_VERSION = '4.49';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -966,11 +975,11 @@ function renderMarkdown(opts) {
     (m, q, id) => 'src=' + q + IMG_PLACEHOLDER + q + ' data-libimg=' + q + id + q);
   if (!window.DOMPurify) {
     // 无消毒器时：外部内容宁可不渲染（只给提示），自家文档保持旧行为
-    preview.innerHTML = remoteOrigin
-      ? '<p style="color:#e06c75">DOMPurify 未加载，出于安全已拒绝渲染外部文档。请强刷（Ctrl+Shift+R）后重试。</p>'
+    preview.innerHTML = isUntrusted()
+      ? '<p style="color:#e06c75">DOMPurify 未加载，出于安全已拒绝渲染不可信内容。请强刷（Ctrl+Shift+R）后重试。</p>'
       : html;
   } else {
-    preview.innerHTML = DOMPurify.sanitize(html, remoteOrigin ? REMOTE_SANITIZE : LOCAL_SANITIZE);
+    preview.innerHTML = DOMPurify.sanitize(html, isUntrusted() ? REMOTE_SANITIZE : LOCAL_SANITIZE);
   }
   // 后处理高亮：对任何 marked 版本都稳，且不依赖已废弃的 setOptions({highlight})
   if (window.hljs && !heavyDoc) {
@@ -981,7 +990,7 @@ function renderMarkdown(opts) {
   // --- Mermaid 图表渲染（按需懒加载 mermaid 库，见 renderMermaidDiagrams）---
   // 大文档跳过：mermaid 每次全量重跑成本高（另有渲染缓存）；外部文档也跳过：
   // 图定义是「可执行描述语言」，渲染进 SVG 后属于额外攻击面，读别人的文章不需要它。
-  if (!heavyDoc && !remoteOrigin) {
+  if (!heavyDoc && !isUntrusted()) {
     try {
       mermaidRendering = Promise.resolve(renderMermaidDiagrams())
         .then(() => { lastSanitizedHtml = snapshotPreviewHtml(); })   // 图渲染完刷新快照，导出才带图
@@ -997,9 +1006,29 @@ function renderMarkdown(opts) {
     .then(() => { if (preview.querySelector('.katex')) lastSanitizedHtml = snapshotPreviewHtml(); })
     .catch(() => {});
   // --- 音频播放器：mp3 等链接自动渲染为 <audio>（见 renderAudioPlayers）---
-  if (!remoteOrigin) renderAudioPlayers();     // 外部文档：不给自动播放的能力
+  if (!isUntrusted()) renderAudioPlayers();     // 不可信内容：不给自动播放的能力
   // --- 裸图片链接自动渲染为 <img>（见 renderImageEmbeds）---
-  if (!remoteOrigin) renderImageEmbeds();       // 外部文档：不把裸链接变成自动请求
+  if (!isUntrusted()) renderImageEmbeds();       // 不可信内容：不把裸链接变成自动请求
+  // 不可信内容里的远程图片：保留位置但不自动请求。
+  // 一篇别人发来的文档，只要打开就会向作者服务器报到（暴露 IP + 阅读时间），
+  // 邮箱客户端和 GitHub 都是这个做法：先显示占位，点一下才加载。
+  if (isUntrusted()) {
+    preview.querySelectorAll('img').forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      if (!/^https?:/i.test(src)) return;        // data: 内联图不用管
+      img.setAttribute('data-remote-src', src);
+      img.removeAttribute('src');
+      img.classList.add('remote-img-blocked');
+      img.setAttribute('title', '远程图片（点击加载）');
+      if (!img.alt) img.alt = '远程图片';
+      img.addEventListener('click', function onClick() {
+        img.src = img.getAttribute('data-remote-src');
+        img.classList.remove('remote-img-blocked');
+        img.removeAttribute('title');
+        img.removeEventListener('click', onClick);
+      }, { once: true });
+    });
+  }
   // --- 标题加 id（支持页内锚点跳转），并建立「标题 slug → 源码行」映射，用于锚点同步滚动 ---
   // 两侧共用同一个 slugger + 同一遍历顺序：同名标题依次得到「标题」「标题-2」…
   // 修复：旧实现直接 h.id = slugify(text)，两节「## 总结」会产生重复 id，目录只能跳到第一个。
@@ -3244,6 +3273,7 @@ function resetUndo() { undoStack = []; redoStack = []; undoBytes = 0; }
 function resetDocContext() {
   currentShareId = null;
   currentFileHandle = null;
+  docTrust = 'own';          // 默认信自家内容；打开别人的文档时由调用方改成 'untrusted'
   resetUndo();
   try { stopPodcastPoll(); } catch (_) {}
   currentSearchHit = null;
@@ -7105,6 +7135,16 @@ async function deleteLibDoc(id) {
 /* 当前文档转存到文库（如从电脑打开的文章） */
 async function addToLibrary() {
   if (currentLibId) { flash('当前已在文库'); return; }
+  // 别人的协作文档同样要确认一次：存进文库等于"认领"，之后按自家文档渲染
+  if (!remoteOrigin && docTrust === 'untrusted') {
+    const ok = await askConfirm('把协作分享的文档存入文库？',
+      '这是别人发来的文档。存入后会变成【你自己的文档】：按自家文档渲染、自动保存、参与 NAS 同步。\n\n' +
+      '确认是你需要的内容再继续。');
+    if (!ok) return;
+    docTrust = 'own';
+    lastRenderedSrc = null;    // 消毒档变了，强制重渲
+    renderMarkdown({ force: true });
+  }
   if (remoteOrigin) {
     const ok = await askConfirm('把外部文档存入文库？',
       '来源：' + remoteOrigin + '\n\n' +
@@ -7450,6 +7490,7 @@ function hideRemoteBanner() {
 function adoptRemoteDoc() {
   remoteOrigin = null;
   remoteHref = '';
+  docTrust = 'own';            // 认领：从这一刻起按自家文档渲染（图片可直接加载、可放音频）
   editor.readOnly = false;
   document.body.classList.remove('remote-mode');
   hideRemoteBanner();
@@ -7591,9 +7632,13 @@ async function initLibrary() {
       toast('正在加载协作文档…', 'info');
       const resp = await fetch(`${R2_WORKER_URL}/${encodeURIComponent(shareId)}`);
       if (resp.ok) {
+        resetDocContext();
         editor.value = await resp.text();
         currentLibId = null;
         currentShareId = shareId;
+        // 这是别人发来的文档：可以编辑（协作），但内容不可信 —— 按 untrusted 渲染，
+        // 否则一篇带 <style>/远程图片的分享文档能重绘界面、伪造凭据表单、暴露阅读者 IP。
+        docTrust = 'untrusted';
         currentName = '协作文档_' + shareId;
         currentNameIsAuto = false;
         updateFileName();
