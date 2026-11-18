@@ -148,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.54';
+const APP_VERSION = '4.55';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -6618,7 +6618,16 @@ if ('serviceWorker' in navigator) {
   const hideUpdateBanner = () => { try { sessionStorage.setItem(SW_DISMISSED, '1'); } catch (_) {} if (updateBanner) updateBanner.hidden = true; };
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').then((reg) => {
+    // ⚠️ 注册 URL 必须带版本参数，且 updateViaCache: 'none'。
+    // 踩过的坑：sw.js 是固定路径，Cloudflare 给它设了 max-age=7200 ——
+    // 部署后两小时内，浏览器检查更新拿到的还是旧 sw.js，于是「修好的版本
+    // 永远装不上」：页面是 4.54，SW 还是 4.53，跨域请求照样被拦成 error。
+    // 加 ?v= 让每次发版都是一个新 URL（CF 按完整 URL 缓存），updateViaCache
+    // 再告诉浏览器别用 HTTP 缓存判断 SW 是否更新。
+    navigator.serviceWorker.register('./sw.js?v=' + encodeURIComponent(APP_VERSION), {
+      scope: './',
+      updateViaCache: 'none',
+    }).then((reg) => {
       // 常规更新检查触发的「发现新版本」
       reg.addEventListener('updatefound', () => {
         const newWorker = reg.installing;
