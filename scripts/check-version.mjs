@@ -85,6 +85,15 @@ for (const f of ['lib/md-core.js', 'lib/md-regex-worker.js']) {
   if (!shellPaths.has(f)) warnings.push(`建议把 ${f} 加入 sw.js 的 SHELL`);
 }
 
+// SW 必须放行跨域请求。
+// 缺这条时，跨域 GET（NAS 下载 / Knowly 搜索 / 配置恢复）会被 SW 接住，
+// 内部 fetch 因为不带 Cookie + CORS 限制而失败，最终 Response.error() →
+// Safari 报 "Response served by service worker is an error"，
+// 用户侧只看到「配置恢复失败」，根因极难定位（v4.54 就是这个 bug）。
+if (!/url\.origin\s*!==\s*self\.location\.origin/.test(sw)) {
+  errors.push('sw.js 缺跨域放行判断（url.origin !== self.location.origin）——跨域 GET 会被 SW 拦成 error');
+}
+
 if (warnings.length) warnings.forEach((w) => console.warn('⚠ ' + w));
 if (errors.length) {
   errors.forEach((e) => console.error('✗ ' + e));

@@ -1,7 +1,7 @@
 'use strict';
 
 // 应用外壳缓存（含本地化的第三方库），决定离线是否可用
-const CACHE_NAME = 'md-editor-v4.53';
+const CACHE_NAME = 'md-editor-v4.54';
 
 const SHELL = [
   './',
@@ -67,6 +67,15 @@ self.addEventListener('fetch', (event) => {
   // 等非常规 scheme 请求，Cache API 不支持（put 会抛 'Request scheme unsupported'），
   // 直接透传、不缓存。
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
+  // ── 跨域请求一律放行，绝不 respondWith ──
+  // 这条缺失过，后果很隐蔽：配置恢复 / NAS 下载 / Knowly 搜索这些跨域 GET
+  // 被本 SW 接住 → 缓存里没有 → SW 内部 fetch(req) 因为不带页面的 Cookie
+  // 且受 CORS 限制而失败 → 落到 Response.error() → Safari 报
+  //「Response served by service worker is an error」，用户看到的是
+  //「配置恢复失败」，而真正的问题在 SW。
+  // 为什么只有部分功能坏：POST 在上面的 method 检查里就放行了，只有跨域 GET 中招。
+  if (url.origin !== self.location.origin) return;
 
   // 应用外壳（index.html / app.js / styles.css / sw.js / manifest）：网络优先。
   // 关键：部署新版本后用户点「立即刷新」，必须能从网络拿到最新外壳，否则在
