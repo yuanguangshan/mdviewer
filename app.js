@@ -148,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.52';
+const APP_VERSION = '4.53';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -1429,7 +1429,12 @@ async function importConfig() {
 
   flash('正在查找配置文件…');
   let list = [];
-  try { list = await findLatestConfig(authHeader); } catch (e) { flash('查找失败：' + e.message); return; }
+  try { list = await findLatestConfig(authHeader); }
+  catch (e) {
+    flash('查找失败：' + ((e && e.name ? e.name + ' ' : '') + (e.message || e)));
+    try { logError('config-list', (e && e.name ? e.name + ': ' : '') + ((e && e.message) || e)); } catch (_) {}
+    return;
+  }
   if (!list.length) { flash('NAS 上还没有配置文件（先在旧设备点「导出配置到 NAS」）'); return; }
 
   const name = list[0];
@@ -1444,11 +1449,31 @@ async function importConfig() {
   try {
     const r = await fetch(NAS_DOWNLOAD_URL + '?filename=' + encodeURIComponent(name),
       { headers: { Authorization: authHeader }, cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    payload = await r.json();
-  } catch (e) { flash('下载失败：' + e.message); return; }
+    // 先取文本再自己解析，不要直接用 r.json()。
+    // 原因：NAS/网关在鉴权失败或后端报错时，常返回 200 + 一段 HTML 错误页，
+    // r.json() 于是抛 SyntaxError —— Safari 把它翻译成"字符串不匹配"，
+    // 看到这个提示根本猜不到是"下到的不是 JSON"。这里把前 120 字带进提示里。
+    const raw = await r.text();
+    if (!r.ok) throw new Error('HTTP ' + r.status + (raw ? '：' + raw.slice(0, 120) : ''));
+    try {
+      payload = JSON.parse(raw);
+    } catch (_) {
+      throw new Error('返回的不是 JSON（可能是登录页或错误页）：' + raw.slice(0, 120).replace(/\s+/g, ' '));
+    }
+  } catch (e) {
+    flash('下载失败：' + ((e && e.message) || e));
+    try { logError('config-restore', (e && e.name ? e.name + ': ' : '') + ((e && e.message) || e)); } catch (_) {}
+    return;
+  }
 
-  if (!payload || payload.app !== 'mdviewer' || !payload.data) { flash('文件格式不对，已中止'); return; }
+  if (!payload || payload.app !== 'mdviewer' || !payload.data) {
+    flash('文件格式不对（app=' + (payload && payload.app) + '），已中止');
+    return;
+  }
+  // 版本差异提示：配置文件可能来自更新的版本，含本机不认识的键
+  if (payload.version && payload.version !== CFG_VERSION) {
+    toast('⚠️ 这份配置来自 v' + payload.version + '，本机是 v' + CFG_VERSION + '；未知的键会被跳过', 'warn', 6000);
+  }
 
   // 只写回白名单里的键（+ 用户明确包含过的敏感键）
   const allowed = new Set(CFG_WHITELIST.concat(payload.includesAiConfig ? CFG_SENSITIVE : []));
