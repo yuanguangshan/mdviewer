@@ -148,7 +148,7 @@ function resolveFetchProxy() {
 
 // 应用版本：单一来源（scripts/sync-version.mjs 会同步 index.html / styles.css / sw.js）。
 // 运行时与 SW 缓存名比对，不一致时提示刷新，避免「页面是新的、脚本是旧的」这种经典事故。
-const APP_VERSION = '4.55';
+const APP_VERSION = '4.56';
 
 // 版本自检：index.html 与 app.js 必须同版（SW 缓存错位会造成「页面是新的、脚本是旧的」，
 // 表现为菜单里明明有的功能点了没反应）。发现不一致时提示强刷，而不是让人瞎猜。
@@ -951,7 +951,10 @@ let lastMath = { blocks: [], tokenBase: '' };   // 本次渲染抽出的公式�
 
 function renderMarkdown(opts) {
   const src = editor.value || '';
-  if (!(opts && opts.force) && src === lastRenderedSrc && preview.childElementCount) return;
+  const settle = () => {
+    if (renderSettleResolve) { const r = renderSettleResolve; renderSettleResolve = null; r(); }
+  };
+  if (!(opts && opts.force) && src === lastRenderedSrc && preview.childElementCount) { settle(); return; }
   lastRenderedSrc = src;
   // 大文档保护：超 1MB 或 5000 行时跳过开销大的后处理（代码高亮 / mermaid），
   // 保证输入停顿不把主线程卡死；预览正文仍正常渲染。行数用偏移缓存，不再全文 split。
@@ -1058,6 +1061,7 @@ function renderMarkdown(opts) {
   lastSanitizedHtml = snapshotPreviewHtml();   // 快照（保留 libimg:// 引用，供导出时内联为 data URL）
   // --- 解析 Blob 图片引用（libimg://）→ 临时 object URL 渲染 ---
   resolveImages();
+  settle();      // 渲染（含 DOM 重建）完成，等这一步的调用方可以继续了
 }
 
 // 把一段 markdown 渲染进任意容器（AI 解读面板用）。
@@ -2337,8 +2341,18 @@ function snapshotPreviewHtml() {
   });
 }
 
+// 本次渲染"已完成"的承诺。renderMarkdown 是 120ms 去抖调度的，调用方拿不到
+// 完成时机 —— 恢复阅读位置就踩过这个坑：restoreReadingProgress 里只等了两帧，
+// 而那时预览还没重建，scrollHeight 是旧值（甚至 0），ratio × 0 = 0，
+// 于是每次都恢复到顶部，看起来像"阅读位置没记住"。
+let renderSettled = Promise.resolve();
+let renderSettleResolve = null;
+
 function scheduleRender() {
   clearTimeout(renderTimer);
+  if (!renderSettleResolve) {
+    renderSettled = new Promise((res) => { renderSettleResolve = res; });
+  }
   renderTimer = setTimeout(renderMarkdown, 120);
 }
 
@@ -2642,14 +2656,28 @@ function restoreReadingProgress() {
       ratio = doc && doc.scrollRatio != null ? doc.scrollRatio : null;
     }
     if (ratio == null) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el = (viewMode === 'preview') ? previewPane : editor;
-        const sMax = el.scrollHeight - el.clientHeight;
-        if (sMax > 0) el.scrollTop = ratio * sMax;
-        updateReadingProgress();
-      });
-    });
+
+    // 必须等本次渲染完成：renderMarkdown 是 120ms 去抖调度的，调用点（afterChange 之后）
+    // 渲染根本还没跑，此时 scrollHeight 是上一份文档的、甚至 0。
+    // 旧实现只等了两帧（~32ms）就把 ratio × 旧高度 写进 scrollTop —— 结果不是回到
+    // 上次位置，而是被钳到 0（顶部），看起来完全没生效。
+    await Promise.resolve(renderSettled).catch(() => {});
+    // 渲染完成后图片/公式还要占位：scrollHeight 会再涨一截，用"连续两次相同"当稳定判据
+    let tries = 0;
+    const apply = () => {
+      const el = (viewMode === 'preview') ? previewPane : editor;
+      const h0 = el.scrollHeight;
+      if (tries++ < 10 && h0 !== el._lastRestoreH) {
+        el._lastRestoreH = h0;
+        requestAnimationFrame(apply);
+        return;
+      }
+      el._lastRestoreH = 0;
+      const sMax = el.scrollHeight - el.clientHeight;
+      if (sMax > 0) el.scrollTop = ratio * sMax;
+      updateReadingProgress();
+    };
+    requestAnimationFrame(apply);
   }).catch(() => {});
 }
 
